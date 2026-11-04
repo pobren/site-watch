@@ -1,0 +1,415 @@
+// The JSON the app page uses. Everything here needs someone signed in, apart from set-up, sign-in and sign-up.
+// Each account sees only its own things; the owner also gets the Admin routes (branding, plans, clients).
+
+import { deliver, newSecret, postTo, sendEmail } from "./alerts.ts";
+import { handleAuth, json } from "./api-auth.ts";
+import { currentAccount } from "./auth.ts";
+import { handleBilling, publicPlan } from "./billing.ts";
+import { checkOne, contextOf, dailyOne } from "./cron.ts";
+import {
+	CHANNEL_NAMES, CHECK_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
+	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
+} from "./core.ts";
+import { DEFAULT_BRAND, install, isLive, newId, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+
+const bad = (error: string, status = 400) => json({ error }, status);
+
+export function shape(r: MonitorRow, origin: string, now = new Date()) {
+	const s = stateOf(r.state);
+	const paused = !!r.paused_until && r.paused_until > iso(now);
+	const cert = r.cert ? JSON.parse(r.cert) : null;
+	const reg = r.reg ? JSON.parse(r.reg) : null;
+	return {
+		id: r.id, kind: r.kind, label: labelOf(r), name: r.name, url: r.url, host: r.host, port: r.port, rules: rulesOf(r.rules), every: r.every, extras: r.extras === 1,
+		status: statusOf(s, !!r.checked_at, paused), why: s.blocked ?? s.why ?? s.certProblem, since: isDown(s) ? s.since : null, ms: s.ms,
+		uptime30: uptime(s, now, 30), uptime90: uptime(s, now, 90), bars: dailyBars(s, now).map((b) => b.up), responses: responseTimes(s),
+		outages: s.outages.slice(-10).reverse(), checkedAt: r.checked_at, pausedUntil: paused ? r.paused_until : null,
+		pingUrl: r.kind === "heartbeat" && r.token ? `${origin}/hb/${r.token}` : null, lastPing: r.last_ping,
+		cert: cert ? { ...cert, daysLeft: daysLeft(cert.expires, now) } : null,
+		reg: reg ? { ...reg, daysLeft: reg.expires ? daysLeft(reg.expires, now) : null } : null,
+	};
+}
+
+
+interface Limits { monitors: number | null; minEvery: number; pages: number | null }
+
+/** What an account may have. The owner has no limits here (the licence covers that, on trust); clients have their plan's. */
+async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
+	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null };
+	const plan = a.plan ? await db.prepare("SELECT * FROM plans WHERE id = ?").bind(a.plan).first<PlanRow>() : null;
+	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0 };
+}
+
+async function everything(env: Env, me: AccountRow, origin: string) {
+	const db = env.DB;
+	const [mons, chans, pages, notices, alerts, inst, limits] = await Promise.all([
+		db.prepare("SELECT * FROM monitors WHERE account_id = ? ORDER BY created_at, id").bind(me.id).all<MonitorRow>(),
+		db.prepare("SELECT id, kind, name, url, secret, on_off, fails FROM channels WHERE account_id = ? ORDER BY id").bind(me.id).all<{ id: number; kind: string; name: string; url: string; secret: string | null; on_off: number; fails: number }>(),
+		db.prepare("SELECT * FROM pages WHERE account_id = ? ORDER BY created_at").bind(me.id).all<{ id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string }>(),
+		db.prepare("SELECT n.* FROM notices n JOIN pages p ON p.id = n.page_id WHERE p.account_id = ? AND (n.resolved_at IS NULL OR n.resolved_at > ?) ORDER BY n.created_at DESC").bind(me.id, iso(new Date(Date.now() - 14 * 86_400_000))).all(),
+		db.prepare("SELECT id, at, monitor_id, subject, text, urgent, sent FROM alerts WHERE account_id = ? ORDER BY id DESC LIMIT 50").bind(me.id).all(),
+		install(db),
+		limitsOf(db, me),
+	]);
+	const out: Record<string, unknown> = {
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer },
+		monitors: mons.results.map((r) => shape(r, origin)),
+		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: CHANNEL_NAMES[c.kind as keyof typeof CHANNEL_NAMES] ?? c.kind, name: c.name, where: maskUrl(c.url), secret: c.secret, on: c.on_off === 1, fails: c.fails })),
+		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: `${origin}/status/${p.slug}` })),
+		notices: notices.results,
+		alerts: alerts.results,
+		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
+		choices: { every: CHECK_EVERY.filter((n) => n >= limits.minEvery), heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS },
+		limits,
+		brand: inst.brand,
+	};
+	if (me.role === "owner") {
+		const [clients, plans] = await Promise.all([
+			db.prepare(`SELECT a.id, a.email, a.name, a.plan, a.status, a.period_end, a.created_at, (SELECT COUNT(*) FROM monitors m WHERE m.account_id = a.id) AS monitors
+				FROM accounts a WHERE a.role = 'client' ORDER BY a.created_at DESC LIMIT 500`).all(),
+			db.prepare("SELECT * FROM plans ORDER BY position, name").all<PlanRow>(),
+		]);
+		out.admin = {
+			alertFrom: inst.alertFrom, emailBinding: !!env.EMAIL, sell: inst.sell, stripeKey: !!env.STRIPE_SECRET_KEY, stripeWebhook: !!env.STRIPE_WEBHOOK_SECRET,
+			webhookUrl: `${origin}/stripe/webhook`, signupUrl: `${origin}/signup`, clients: clients.results,
+			plans: plans.results.map((p) => ({ ...publicPlan(p), stripePrice: p.stripe_price, on: p.on_off === 1, position: p.position })),
+			licence: { websites: mons.results.filter((m) => m.kind === "website").length, limit: LICENCE_SITES },
+		};
+	}
+	return out;
+}
+
+async function body(request: Request): Promise<Record<string, unknown>> {
+	return request.json<Record<string, unknown>>().catch(() => ({}));
+}
+
+/** A new monitor from the Add form. */
+function newMonitor(b: Record<string, unknown>, accountId: string, minEvery: number): MonitorRow | { error: string } {
+	const kind = b.kind as Kind;
+	const now = iso(new Date());
+	const row: MonitorRow = {
+		id: newId(8), account_id: accountId, kind, name: cleanName(b.name), url: null, host: null, port: null, rules: null, every: DEFAULT_EVERY, token: null, state: null,
+		extras: b.extras === false ? 0 : 1, cert: null, reg: null, cert_sent: "", reg_sent: "", daily_at: null, paused_until: null, last_ping: null, checked_at: null, created_at: now,
+	};
+	const every = Number(b.every);
+	const pick = (n: number) => (CHECK_EVERY.includes(n) && n >= minEvery ? n : Math.max(DEFAULT_EVERY, minEvery));
+	if (kind === "website") {
+		const url = cleanUrl(b.url);
+		if (!url) return { error: "Please enter the web address to watch, such as https://example.com/." };
+		const rules = cleanRules(b.rules);
+		if ("error" in rules) return rules;
+		Object.assign(row, { url, rules: JSON.stringify(rules), every: pick(every) });
+	} else if (kind === "mail" || kind === "port") {
+		const host = cleanHost(b.host);
+		if (!host) return { error: "Please enter the server's name, such as mail.example.com." };
+		const port = cleanPort(b.port);
+		if (!port) return { error: Number(b.port) === 25 ? "Port 25 can't be checked from Cloudflare: Workers aren't allowed to connect out on it. Check 587 or 465 instead." : "Please enter a port number from 1 to 65535." };
+		if (kind === "mail" && !mailPort(port)) return { error: "Please choose one of the mail ports listed, or add it as a port check instead." };
+		Object.assign(row, { host, port, every: pick(every), extras: 0 });
+	} else if (kind === "heartbeat") {
+		if (!HEARTBEAT_EVERY.includes(every)) return { error: "Please choose how often the job runs." };
+		if (!row.name) return { error: "Please give the heartbeat a name, such as Nightly backup, so you know which job it is." };
+		Object.assign(row, { every, token: newId(16), extras: 0, checked_at: now });
+	} else {
+		return { error: "Please choose what to watch." };
+	}
+	return row;
+}
+
+const cleanColour = (x: unknown) => (typeof x === "string" && /^#[0-9a-f]{6}$/i.test(x.trim()) ? x.trim().toLowerCase() : null);
+function cleanLogo(x: unknown): string | null | { error: string } {
+	if (x === null || x === "") return null;
+	if (typeof x !== "string") return { error: "Please give the logo as a web address." };
+	if (/^data:image\/(png|svg\+xml|jpeg|webp);base64,[a-z0-9+/=]+$/i.test(x)) return x.length <= 150_000 ? x : { error: "Please use a logo under 100 KB." };
+	try {
+		const u = new URL(x);
+		return u.protocol === "https:" ? u.toString() : { error: "The logo address needs to start with https://." };
+	} catch {
+		return { error: "Please give the logo as a web address starting with https://." };
+	}
+}
+
+export async function handleApi(request: Request, env: Env, path: string, url: URL): Promise<Response> {
+	const db = env.DB;
+	const auth = await handleAuth(request, env, path, url);
+	if (auth) return auth;
+	const me = await currentAccount(request, db);
+	const billing = await handleBilling(request, env, path, url, me);
+	if (billing) return billing;
+	if (!me) return bad("Please sign in.", 401);
+
+	const owner = me.role === "owner";
+	const inst = await install(db);
+	if (owner && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
+	const ctx = { ...(await contextOf(env)), link: `${url.origin}/`, helloName: url.hostname };
+	const reply = async (extra: Record<string, unknown> = {}) => json({ ...(await everything(env, me, url.origin)), ...extra });
+	const method = request.method;
+
+	if (path === "/api/state" && method === "GET") return reply();
+	if (path === "/api/export" && method === "GET") {
+		const data = await everything(env, me, url.origin);
+		return json({ exportedAt: iso(new Date()), ...data }, 200, { "content-disposition": `attachment; filename="site-watch-${iso(new Date()).slice(0, 10)}.json"` });
+	}
+	if (method !== "POST" && method !== "DELETE") return bad("Not found", 404);
+	const b = method === "POST" ? await body(request) : {};
+	const limits = await limitsOf(db, me);
+
+	// -- Monitors --
+	if (path === "/api/monitors" && method === "POST") {
+		if (!isLive(me)) return bad("Your plan isn't active, so checks are paused. Choose a plan on the Account tab first.", 402);
+		const row = newMonitor(b, me.id, limits.minEvery);
+		if ("error" in row) return bad(row.error);
+		if (limits.monitors !== null) {
+			const n = await db.prepare("SELECT COUNT(*) AS n FROM monitors WHERE account_id = ?").bind(me.id).first<{ n: number }>();
+			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan watches up to ${limits.monitors} things. Remove one first, or change plan on the Account tab.`, 403);
+		}
+		const dup = await db.prepare("SELECT 1 FROM monitors WHERE account_id = ? AND kind = ? AND kind != 'heartbeat' AND COALESCE(url, '') = COALESCE(?, '') AND COALESCE(host, '') = COALESCE(?, '') AND COALESCE(port, 0) = COALESCE(?, 0)")
+			.bind(me.id, row.kind, row.url, row.host, row.port).first();
+		if (dup) return bad("You're already watching that.", 409);
+		await db.prepare(`INSERT INTO monitors (id, account_id, kind, name, url, host, port, rules, every, token, extras, checked_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			.bind(row.id, me.id, row.kind, row.name, row.url, row.host, row.port, row.rules, row.every, row.token, row.extras, row.checked_at, row.created_at).run();
+		// Checked once straight away, without alerts, so you see at once whether it can be reached.
+		if (row.kind !== "heartbeat") {
+			await checkOne(env, row, me, new Date(), ctx, { quiet: true });
+			if (row.kind === "website" && row.extras) await dailyOne(env, row, me, new Date(), ctx, true).catch(() => undefined);
+		}
+		return reply({ added: row.id });
+	}
+	const mon = /^\/api\/monitors\/([0-9a-f]{16})(\/(check|pause|resume))?$/.exec(path);
+	if (mon) {
+		const row = await db.prepare("SELECT * FROM monitors WHERE id = ? AND account_id = ?").bind(mon[1], me.id).first<MonitorRow>();
+		if (!row) return bad("We couldn't find that. It may have been removed already.", 404);
+		if (method === "DELETE") {
+			await db.prepare("DELETE FROM monitors WHERE id = ?").bind(row.id).run();
+			return reply();
+		}
+		if (mon[3] === "check") {
+			if (!isLive(me)) return bad("Your plan isn't active, so checks are paused.", 402);
+			if (row.kind !== "heartbeat") await checkOne(env, row, me, new Date(), ctx);
+			if (row.kind === "website" && row.extras) await dailyOne(env, row, me, new Date(), ctx).catch(() => undefined);
+			return reply();
+		}
+		if (mon[3] === "pause") {
+			const mins = Number(b.minutes);
+			if (!Number.isInteger(mins) || mins < 5 || mins > 60 * 24 * 365) return bad("Please choose how long to pause for.");
+			await db.prepare("UPDATE monitors SET paused_until = ? WHERE id = ?").bind(iso(new Date(Date.now() + mins * 60_000)), row.id).run();
+			return reply();
+		}
+		if (mon[3] === "resume") {
+			await db.prepare("UPDATE monitors SET paused_until = NULL, checked_at = CASE kind WHEN 'heartbeat' THEN checked_at ELSE NULL END WHERE id = ?").bind(row.id).run();
+			return reply();
+		}
+		// Edit: name, how often, rules and the daily certificate and renewal look.
+		const name = "name" in b ? cleanName(b.name) : row.name;
+		if (row.kind === "heartbeat" && !name) return bad("Please give the heartbeat a name.");
+		let every = row.every;
+		if ("every" in b) {
+			const n = Number(b.every);
+			if (!(row.kind === "heartbeat" ? HEARTBEAT_EVERY : CHECK_EVERY.filter((x) => x >= limits.minEvery)).includes(n)) return bad("Please choose how often.");
+			every = n;
+		}
+		let rules = row.rules;
+		if (row.kind === "website" && "rules" in b) {
+			const r = cleanRules(b.rules);
+			if ("error" in r) return bad(r.error);
+			rules = JSON.stringify(r);
+		}
+		const extras = row.kind === "website" && "extras" in b ? (b.extras ? 1 : 0) : row.extras;
+		await db.prepare("UPDATE monitors SET name = ?, every = ?, rules = ?, extras = ? WHERE id = ?").bind(name, every, rules, extras, row.id).run();
+		return reply();
+	}
+
+	// -- Alert channels --
+	if (path === "/api/channels" && method === "POST") {
+		const c = cleanChannel(b);
+		if ("error" in c) return bad(c.error);
+		const count = await db.prepare("SELECT COUNT(*) AS n FROM channels WHERE account_id = ?").bind(me.id).first<{ n: number }>();
+		if ((count?.n ?? 0) >= 20) return bad("That's 20 channels already. Remove one first.");
+		await db.prepare("INSERT INTO channels (account_id, kind, name, url, secret, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(me.id, c.kind, c.name, c.url, c.kind === "webhook" ? newSecret() : null, iso(new Date())).run();
+		return reply();
+	}
+	const ch = /^\/api\/channels\/(\d+)(\/test)?$/.exec(path);
+	if (ch) {
+		const c = await db.prepare("SELECT * FROM channels WHERE id = ? AND account_id = ?").bind(Number(ch[1]), me.id).first<{ id: number; kind: string; url: string; secret: string | null; name: string }>();
+		if (!c) return bad("We couldn't find that channel.", 404);
+		if (method === "DELETE") {
+			await db.prepare("DELETE FROM channels WHERE id = ?").bind(c.id).run();
+			return reply();
+		}
+		if (ch[2]) {
+			const ok = await postTo(c, { event: "test", subject: `Test alert from ${inst.brand.name}`, text: `If you can read this, ${inst.brand.name} alerts will arrive here.`, urgent: false, url: ctx.link, sentAt: iso(new Date()), app: inst.brand.name });
+			if (ok) await db.prepare("UPDATE channels SET fails = 0, on_off = 1 WHERE id = ?").bind(c.id).run();
+			return ok ? reply({ ok: true }) : bad(`${c.name} didn't accept the test. Check the address is right and still switched on in ${CHANNEL_NAMES[c.kind as keyof typeof CHANNEL_NAMES] ?? "the service"}.`, 502);
+		}
+		if ("on" in b) await db.prepare("UPDATE channels SET on_off = ?, fails = 0 WHERE id = ?").bind(b.on ? 1 : 0, c.id).run();
+		return reply();
+	}
+
+	// -- Your settings --
+	if (path === "/api/settings" && method === "POST") {
+		let alertTo = me.alert_to;
+		if ("alertTo" in b) {
+			if (b.alertTo === "" || b.alertTo === null) alertTo = null;
+			else {
+				alertTo = cleanEmail(b.alertTo);
+				if (!alertTo) return bad("Please enter a whole email address, such as you@example.com.");
+			}
+		}
+		let tz = me.tz;
+		if (typeof b.tz === "string") {
+			try {
+				new Intl.DateTimeFormat("en-GB", { timeZone: b.tz });
+				tz = b.tz;
+			} catch {
+				return bad("We don't know that time zone.");
+			}
+		}
+		let perDay = me.alerts_per_day;
+		if ("alertsPerDay" in b) {
+			perDay = Number(b.alertsPerDay);
+			if (!Number.isInteger(perDay) || perDay < 5 || perDay > 1000) return bad("Please choose between 5 and 1,000 alerts a day.");
+		}
+		const name = "name" in b ? cleanName(b.name, 80) : me.name;
+		await db.prepare("UPDATE accounts SET alert_to = ?, tz = ?, alerts_per_day = ?, name = ? WHERE id = ?").bind(alertTo, tz, perDay, name, me.id).run();
+		Object.assign(me, { alert_to: alertTo, tz, alerts_per_day: perDay, name });
+		return reply({ ok: true });
+	}
+	if (path === "/api/alerts/test" && method === "POST") {
+		await deliver(env, me, { subject: `Test alert from ${inst.brand.name}`, text: `This is a test. Every alert goes to the places that got this one.\n\nOpen ${inst.brand.name}: ${ctx.link}`, urgent: false }, null);
+		const last = await db.prepare("SELECT sent FROM alerts WHERE account_id = ? ORDER BY id DESC LIMIT 1").bind(me.id).first<{ sent: string }>();
+		return reply({ ok: true, sent: last?.sent ?? "" });
+	}
+
+	// -- Status pages --
+	if (path === "/api/pages" && method === "POST") {
+		const title = cleanName(b.title, 80);
+		if (!title) return bad("Please give the status page a title, such as Example Ltd status.");
+		const slug = cleanSlug(b.slug || title);
+		if (!slug) return bad("Please choose an address for the page, using letters, numbers and dashes.");
+		const intro = typeof b.intro === "string" ? b.intro.trim().slice(0, 500) || null : null;
+		const host = typeof b.host === "string" && b.host.trim() ? cleanHost(b.host) : null;
+		if (typeof b.host === "string" && b.host.trim() && !host) return bad("Please enter just the address, such as status.example.com.");
+		const mine = new Set((await db.prepare("SELECT id FROM monitors WHERE account_id = ?").bind(me.id).all<{ id: string }>()).results.map((r) => r.id));
+		const ids = Array.isArray(b.monitors) ? b.monitors.filter((x): x is string => typeof x === "string" && mine.has(x)).slice(0, 60) : [];
+		const id = typeof b.id === "string" && /^[0-9a-f]{12}$/.test(b.id) ? b.id : null;
+		if (id && !(await db.prepare("SELECT 1 FROM pages WHERE id = ? AND account_id = ?").bind(id, me.id).first())) return bad("We couldn't find that page.", 404);
+		if (!id && limits.pages !== null) {
+			const n = await db.prepare("SELECT COUNT(*) AS n FROM pages WHERE account_id = ?").bind(me.id).first<{ n: number }>();
+			if ((n?.n ?? 0) >= limits.pages) return bad(limits.pages ? `Your plan includes ${limits.pages} status page${limits.pages === 1 ? "" : "s"}.` : "Your plan doesn't include status pages.", 403);
+		}
+		const taken = await db.prepare("SELECT id FROM pages WHERE slug = ? AND id != ?").bind(slug, id ?? "").first();
+		if (taken) return bad("Another status page uses that address. Please choose another.", 409);
+		if (host && (await db.prepare("SELECT id FROM pages WHERE host = ? AND id != ?").bind(host, id ?? "").first())) return bad("Another status page uses that address.", 409);
+		if (id) await db.prepare("UPDATE pages SET slug = ?, title = ?, intro = ?, host = ?, monitors = ? WHERE id = ?").bind(slug, title, intro, host, JSON.stringify(ids), id).run();
+		else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), iso(new Date())).run();
+		return reply({ ok: true });
+	}
+	const pg = /^\/api\/pages\/([0-9a-f]{12})(\/notices)?$/.exec(path);
+	if (pg) {
+		if (!(await db.prepare("SELECT 1 FROM pages WHERE id = ? AND account_id = ?").bind(pg[1], me.id).first())) return bad("We couldn't find that page.", 404);
+		if (method === "DELETE") {
+			await db.batch([db.prepare("DELETE FROM notices WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM pages WHERE id = ?").bind(pg[1])]);
+			return reply();
+		}
+		if (pg[2]) {
+			const title = cleanName(b.title, 120);
+			if (!title) return bad("Please give the notice a short title, such as Email is slow this morning.");
+			const impact = ["minor", "major", "maintenance"].includes(String(b.impact)) ? String(b.impact) : "minor";
+			const text = typeof b.body === "string" ? b.body.trim().slice(0, 2000) : "";
+			await db.prepare("INSERT INTO notices (page_id, title, body, impact, created_at) VALUES (?, ?, ?, ?, ?)").bind(pg[1], title, text, impact, iso(new Date())).run();
+			return reply();
+		}
+	}
+	const nt = /^\/api\/notices\/(\d+)(\/resolve)?$/.exec(path);
+	if (nt) {
+		const n = await db.prepare("SELECT n.id FROM notices n JOIN pages p ON p.id = n.page_id WHERE n.id = ? AND p.account_id = ?").bind(Number(nt[1]), me.id).first();
+		if (!n) return bad("We couldn't find that notice.", 404);
+		if (method === "DELETE") await db.prepare("DELETE FROM notices WHERE id = ?").bind(Number(nt[1])).run();
+		else if (nt[2]) await db.prepare("UPDATE notices SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL").bind(iso(new Date()), Number(nt[1])).run();
+		return reply();
+	}
+
+	if (!owner) return bad("Not found", 404);
+	return admin(request, env, path, b, reply);
+}
+
+/** The owner's Admin tab: sending address, branding, selling, plans and clients. */
+async function admin(request: Request, env: Env, path: string, b: Record<string, unknown>, reply: (extra?: Record<string, unknown>) => Promise<Response>): Promise<Response> {
+	const db = env.DB;
+	const method = request.method;
+	if (path === "/api/admin/install" && method === "POST") {
+		if ("alertFrom" in b) {
+			if (b.alertFrom === "" || b.alertFrom === null) await setMeta(db, "alert_from", null);
+			else {
+				const e = cleanEmail(b.alertFrom);
+				if (!e) return bad("Please enter the whole address alerts come from, such as alerts@example.com.");
+				await setMeta(db, "alert_from", e);
+			}
+		}
+		if ("sell" in b) {
+			if (b.sell && !env.STRIPE_SECRET_KEY) return bad("Add your STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET secrets to the Worker first (see the README).");
+			await setMeta(db, "sell", b.sell ? "1" : null);
+		}
+		return reply({ ok: true });
+	}
+	if (path === "/api/admin/brand" && method === "POST") {
+		const inst = await install(db);
+		const brand = { ...inst.brand };
+		if ("name" in b) brand.name = cleanName(b.name, 40) ?? DEFAULT_BRAND.name;
+		if ("colour" in b) brand.colour = cleanColour(b.colour) ?? DEFAULT_BRAND.colour;
+		if ("support" in b) {
+			const s = typeof b.support === "string" ? b.support.trim() : "";
+			brand.support = s ? (cleanEmail(s) ?? (/^https:\/\/\S+$/.test(s) ? s : null)) : null;
+			if (s && !brand.support) return bad("Please give a support email address, or a web address starting with https://.");
+		}
+		if ("logo" in b) {
+			const l = cleanLogo(b.logo);
+			if (l && typeof l === "object") return bad(l.error);
+			brand.logo = l;
+		}
+		if ("hideCredit" in b) brand.hideCredit = b.hideCredit === true;
+		await setMeta(db, "brand", JSON.stringify(brand));
+		return reply({ ok: true });
+	}
+	if (path === "/api/admin/plans" && method === "POST") {
+		const name = cleanName(b.name, 40);
+		if (!name) return bad("Please give the plan a name, such as Small business.");
+		const num = (x: unknown, lo: number, hi: number) => (Number.isInteger(Number(x)) && Number(x) >= lo && Number(x) <= hi ? Number(x) : null);
+		const monitors = num(b.monitors, 1, 10_000);
+		const pages = num(b.pages, 0, 100);
+		const minEvery = CHECK_EVERY.includes(Number(b.minEvery)) ? Number(b.minEvery) : null;
+		if (monitors === null || pages === null || minEvery === null) return bad("Please fill in what the plan includes: things to watch, how often and status pages.");
+		const price = typeof b.stripePrice === "string" && b.stripePrice.trim() ? b.stripePrice.trim() : null;
+		if (price && !/^price_[A-Za-z0-9]+$/.test(price)) return bad("The Stripe price ID starts with price_. Find it on the product's page in Stripe.");
+		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1];
+		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		return reply({ ok: true });
+	}
+	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);
+	if (pl && method === "DELETE") {
+		const used = await db.prepare("SELECT COUNT(*) AS n FROM accounts WHERE plan = ?").bind(pl[1]).first<{ n: number }>();
+		if (used?.n) return bad(`${used.n} client${used.n === 1 ? " is" : "s are"} on this plan. Switch it off instead, so nobody new can choose it.`, 409);
+		await db.prepare("DELETE FROM plans WHERE id = ?").bind(pl[1]).run();
+		return reply();
+	}
+	const cl = /^\/api\/admin\/clients\/([0-9a-f]{16})$/.exec(path);
+	if (cl) {
+		const c = await db.prepare("SELECT id FROM accounts WHERE id = ? AND role = 'client'").bind(cl[1]).first();
+		if (!c) return bad("We couldn't find that client.", 404);
+		if (method === "DELETE") {
+			await db.batch([
+				db.prepare("DELETE FROM notices WHERE page_id IN (SELECT id FROM pages WHERE account_id = ?)").bind(cl[1]),
+				...["pages", "monitors", "channels", "alerts"].map((t) => db.prepare(`DELETE FROM ${t} WHERE account_id = ?`).bind(cl[1])),
+				db.prepare("DELETE FROM accounts WHERE id = ?").bind(cl[1]),
+			]);
+			return reply();
+		}
+		// Free of charge (no Stripe), or held. Stripe's next webhook for them wins again.
+		if ("status" in b) await db.prepare("UPDATE accounts SET status = ? WHERE id = ?").bind(b.status === "active" ? "active" : "none", cl[1]).run();
+		if ("plan" in b && typeof b.plan === "string") await db.prepare("UPDATE accounts SET plan = (SELECT id FROM plans WHERE id = ?) WHERE id = ?").bind(b.plan, cl[1]).run();
+		return reply();
+	}
+	return bad("Not found", 404);
+}

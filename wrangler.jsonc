@@ -1,0 +1,14 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "site-watch",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-01-15",
+	// One D1 database. Wrangler and the Deploy to Cloudflare button make it on the first deploy; Site Watch makes
+	// its own tables the first time it runs.
+	"d1_databases": [{ "binding": "DB", "database_name": "site-watch" }],
+	// Alerts by email (optional): needs a domain on this account with Email Routing on. See the README.
+	"send_email": [{ "name": "EMAIL" }],
+	// Checks whatever is due, every minute.
+	"triggers": { "crons": ["* * * * *"] },
+	"observability": { "enabled": true }
+}

@@ -1,0 +1,41 @@
+{
+	"name": "site-watch",
+	"version": "1.0.0",
+	"private": true,
+	"description": "Watch your websites, mail servers, ports and scheduled jobs from your own Cloudflare account. Free for personal and small business use, source available.",
+	"license": "SEE LICENSE IN LICENSE",
+	"type": "module",
+	"homepage": "https://paulobrien.dev/watch/",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/pobren/site-watch.git"
+	},
+	"bugs": {
+		"url": "https://github.com/pobren/site-watch/issues"
+	},
+	"scripts": {
+		"dev": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"test": "node --experimental-strip-types --test test/*.test.ts",
+		"typecheck": "tsc --noEmit",
+		"package": "node scripts/package.mjs"
+	},
+	"engines": {
+		"node": ">=22"
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^5.20261019.1",
+		"esbuild": "^0.25.0",
+		"typescript": "^5.8.3",
+		"wrangler": "^4.20.0"
+	},
+	"cloudflare": {
+		"label": "Site Watch",
+		"products": ["Workers", "D1"],
+		"bindings": {
+			"SETUP_TOKEN": {
+				"description": "A long secret code you choose (replace the example, which won't work). After deploying, open `https://<your Site Watch>/setup?code=<your code>` to make your account. Only someone with the code can."
+			}
+		}
+	}
+}
