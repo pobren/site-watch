@@ -233,7 +233,7 @@ function setupView() {
 function signinView(note) {
 	const email = h("input", { type: "email", autocomplete: "email", required: true });
 	const pw = h("input", { type: "password", autocomplete: "current-password", required: true });
-	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { await api("/api/signin", { email: email.value, password: pw.value, ts: await robot() }); history.replaceState(null, "", "/"); start(); }); } },
+	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { await api("/api/signin", { email: email.value, password: pw.value, ts: await robot() }); const next = new URLSearchParams(location.search).get("next") || ""; if (next.startsWith("/authorize?")) { location.href = next; return; } history.replaceState(null, "", "/"); start(); }); } },
 		h("h1", null, "Sign in"),
 		note ? msg("ok", note) : null,
 		field("Email address", email), field("Password", pw),
@@ -291,7 +291,7 @@ function shell(content) {
 		h("div", { class: "top" }, h("div", { class: "in" }, logo(), h("nav", null, tabs.map(([id, label, ic]) => h("button", { class: tab === id ? "on" : "", onclick: () => go(id) }, icon(ic), label))))),
 		h("main", null, flashText ? msg("ok", flashText) : null, content, h("p", { class: "foot" }, brand().name + " " + window.SW.version)));
 }
-function go(t) { tab = t; editing = null; location.hash = t; draw(); window.scrollTo(0, 0); }
+function go(t) { tab = t; editing = null; newKey = null; location.hash = t; draw(); window.scrollTo(0, 0); }
 
 function draw() {
 	if (!state) return;
@@ -502,9 +502,32 @@ function account() {
 		h("div", { class: "card" }, h("h2", null, "Your details"), field("Name", name), h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/settings", { name: name.value }), "Saved"), "main"))),
 		h("div", { class: "card" }, h("h2", null, "Change your password"), field("Current password", cur), field("New password", next, "At least 10 characters."),
 			h("div", { class: "btns" }, btn("Change password", "key", (e) => act(e.currentTarget, async () => { await api("/api/password", { current: cur.value, next: next.value }); return api("/api/state"); }, "Password changed. Other devices are signed out.")))),
+		apiCard(),
 		h("div", { class: "card" }, h("h2", null, "Your data"), h("p", null, "Download everything as a JSON file: what you watch, its history, your channels and status pages."),
 			h("div", { class: "btns" }, h("a", { class: "btn", href: "/api/export" }, icon("down"), "Download my data"))),
 		h("div", { class: "btns" }, btn("Sign out", "out", async () => { await api("/api/signout", {}); location.href = "/signin"; }), btn("Sign out everywhere", "out", async () => { await api("/api/signout-all", {}); location.href = "/signin"; })));
+}
+
+// API keys and the AI connector. A new key is shown once, straight after it's made.
+let newKey = null;
+function apiCard() {
+	const c = state.connector;
+	const kname = h("input", { placeholder: "Zapier, Backup script…" });
+	const change = h("input", { type: "checkbox" });
+	return h("div", { class: "card" }, h("h2", null, "API and AI connector"),
+		h("p", null, "Use what you watch in your own scripts and tools, or ask Claude about it. ", h("a", { href: "https://paulobrien.dev/watch/api/", target: "_blank", rel: "noopener" }, "How the API works")),
+		h("label", null, "Your API address"), copyBox(c.api),
+		newKey ? h("div", { class: "ok" }, h("b", null, "Copy your new key now. "), "It won't be shown again.", copyBox(newKey)) : null,
+		h("h3", { style: "margin-top:16px" }, "API keys"),
+		state.apiKeys.length ? h("table", null, h("tr", null, h("th", null, "Key"), h("th", null, "Can"), h("th", null, "Last used"), h("th", null, "")),
+			state.apiKeys.map((k) => h("tr", null, h("td", null, h("b", null, k.name), h("div", { class: "hint" }, h("code", null, k.hint + "…"))), h("td", null, k.change ? "Read and change" : "Read only"), h("td", null, ago(k.lastUsed)),
+				h("td", null, btn("Delete", "trash", (e) => { if (confirm("Delete this key? Anything using it stops working straight away.")) act(e.currentTarget, async () => { newKey = null; return api("/api/keys/" + k.id, undefined, "DELETE"); }, "Key deleted"); }, "small danger"))))) : h("p", { class: "hint" }, "No keys yet."),
+		h("div", { class: "two" }, field("Name for a new key", kname), h("label", { class: "check", style: "align-self:end" }, change, "It can change things (add, pause and remove monitors, post notices)")),
+		h("div", { class: "btns" }, btn("Make a key", "key", (e) => act(e.currentTarget, async () => { const r = await api("/api/keys", { name: kname.value, change: change.checked }); newKey = r.newKey; return r; }, "Key made"), "main")),
+		h("h3", { style: "margin-top:16px" }, "AI connector"),
+		h("p", null, "In Claude, open Settings, then Connectors, then Add custom connector, and paste this address. Claude asks you to sign in here once. It can only read."),
+		copyBox(c.address),
+		c.linked ? h("div", { class: "btns" }, btn("Disconnect AI apps", "x", (e) => act(e.currentTarget, () => api("/api/connector/disconnect", {}), "Disconnected"))) : h("p", { class: "hint" }, "Nothing connected yet."));
 }
 
 function admin() {

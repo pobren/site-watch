@@ -108,8 +108,19 @@ const SCHEMA = [
 	`CREATE TABLE IF NOT EXISTS notices (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, page_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
 		impact TEXT NOT NULL DEFAULT 'minor', created_at TEXT NOT NULL, resolved_at TEXT)`,
+	// 1.2.0: API keys (keys.ts) and the AI connector's sign-in (oauth.ts). Keys, codes and tokens are kept as SHA-256 hashes.
+	`CREATE TABLE IF NOT EXISTS api_keys (
+		id TEXT PRIMARY KEY, account_id TEXT NOT NULL, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL,
+		can_change INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, last_used TEXT, window_start INTEGER NOT NULL DEFAULT 0, window_count INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE INDEX IF NOT EXISTS api_keys_account ON api_keys (account_id)`,
+	`CREATE TABLE IF NOT EXISTS oauth_clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, redirect_uris TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS oauth_codes (
+		code_hash TEXT PRIMARY KEY, client_id TEXT NOT NULL, account_id TEXT NOT NULL, redirect_uri TEXT NOT NULL, challenge TEXT NOT NULL, expires INTEGER NOT NULL)`,
+	`CREATE TABLE IF NOT EXISTS oauth_tokens (
+		token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, client_id TEXT NOT NULL, account_id TEXT NOT NULL, expires INTEGER NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS oauth_tokens_account ON oauth_tokens (account_id)`,
 ];
-const SCHEMA_VERSION = "1";
+const SCHEMA_VERSION = "2";
 
 let ready: Promise<void> | null = null;
 

@@ -28,6 +28,35 @@ Public pages showing whether things are working, 90 days of daily bars and your 
 
 <img src="docs/status-page.png" alt="A Site Watch status page on a phone" width="320">
 
+## API, webhooks and AI connector
+
+Full guide: [paulobrien.dev/watch/api](https://paulobrien.dev/watch/api/). The same rules as Mail App, ReaderCount and DMARC Reports.
+
+**API.** Make a key on the **Account** tab (Read only, or Read and change). It's shown once. Send it in a header:
+
+```sh
+curl https://YOUR-SITE-WATCH-ADDRESS/api/v1/monitors \
+  -H "Authorization: Bearer watch_..."
+```
+
+| Request | What it does |
+| --- | --- |
+| `GET /api/v1/monitors` | Everything you watch: status, uptime, response time, certificate and domain renewal |
+| `GET /api/v1/monitors/{id}` | One of them, with its last 10 outages |
+| `POST /api/v1/monitors` | Start watching something (same fields as the Add tab) |
+| `POST /api/v1/monitors/{id}/check`, `/pause`, `/resume` | Check now, pause for `{"minutes": 60}`, or start again |
+| `DELETE /api/v1/monitors/{id}` | Stop watching it |
+| `GET /api/v1/alerts` | The latest alerts |
+| `GET /api/v1/pages` | Your status pages and their notices |
+| `POST /api/v1/pages/{id}/notices` | Post a notice: `{"title": "...", "body": "...", "impact": "minor"}` |
+| `POST /api/v1/notices/{id}/resolve` | Mark a notice resolved |
+
+Errors come back as `{"error": "...", "docs": "..."}`. Each key can make 60 requests a minute. Keep keys on your server, never in a web page.
+
+**Webhooks.** Add **Your own webhook** on the **Alerts** tab. Each alert is a JSON `POST` with a `type` (`monitor.down`, `monitor.up`, `monitor.flapping`, `monitor.blocked`, `monitor.cert`, `cert.expiring`, `domain.expiring`), the `monitor` it's about, and a `Site-Watch-Signature: t=...,v1=...` header: HMAC-SHA256 of `<t>.<body>` with the webhook's `whsec_` secret, the same as Mail App.
+
+**AI connector.** In Claude, open **Settings › Connectors › Add custom connector** and paste `https://YOUR-SITE-WATCH-ADDRESS/mcp`. Claude asks you to sign in once, and can only read. Apps that let you add a header can send an API key instead.
+
 ## Your brand, and selling to clients
 
 On the Admin tab you can change the name, logo, colour and support address used everywhere: the app, status pages, emails and chat alerts.

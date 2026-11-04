@@ -11,6 +11,8 @@ import {
 	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
 import { DEFAULT_BRAND, install, isLive, newId, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { deleteKey, listKeys, makeKey } from "./keys.ts";
+import { connectorLinked, revokeAll } from "./oauth.ts";
 
 const bad = (error: string, status = 400) => json({ error }, status);
 
@@ -62,6 +64,8 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		choices: { every: CHECK_EVERY.filter((n) => n >= limits.minEvery), heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS },
 		limits,
 		brand: inst.brand,
+		apiKeys: await listKeys(db, me.id),
+		connector: { address: `${origin}/mcp`, api: `${origin}/api/v1`, linked: await connectorLinked(db, me.id, Date.now()) },
 	};
 	if (me.role === "owner") {
 		const [clients, plans] = await Promise.all([
@@ -138,20 +142,46 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	if (billing) return billing;
 	if (!me) return bad("Please sign in.", 401);
 
-	const owner = me.role === "owner";
 	const inst = await install(db);
-	if (owner && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
-	const ctx = { ...(await contextOf(env)), link: `${url.origin}/`, helloName: url.hostname };
-	const reply = async (extra: Record<string, unknown> = {}) => json({ ...(await everything(env, me, url.origin)), ...extra });
+	if (me.role === "owner" && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
 	const method = request.method;
 
-	if (path === "/api/state" && method === "GET") return reply();
+	if (path === "/api/state" && method === "GET") return json(await everything(env, me, url.origin));
 	if (path === "/api/export" && method === "GET") {
 		const data = await everything(env, me, url.origin);
 		return json({ exportedAt: iso(new Date()), ...data }, 200, { "content-disposition": `attachment; filename="site-watch-${iso(new Date()).slice(0, 10)}.json"` });
 	}
 	if (method !== "POST" && method !== "DELETE") return bad("Not found", 404);
 	const b = method === "POST" ? await body(request) : {};
+
+	// -- API keys and the AI connector (Account tab). Only from the signed-in page, never with a key. --
+	if (path === "/api/keys" && method === "POST") {
+		const made = await makeKey(db, me.id, b.name, b.change === true);
+		if ("error" in made) return bad(made.error);
+		return json({ ...(await everything(env, me, url.origin)), newKey: made.key });
+	}
+	const key = /^\/api\/keys\/([0-9a-f]{16})$/.exec(path);
+	if (key && method === "DELETE") {
+		await deleteKey(db, me.id, key[1]);
+		return json(await everything(env, me, url.origin));
+	}
+	if (path === "/api/connector/disconnect" && method === "POST") {
+		await revokeAll(db, me.id);
+		return json(await everything(env, me, url.origin));
+	}
+	return act(env, me, path, method, b, url, request);
+}
+
+/**
+ * Everything that changes something: the app page's buttons, and the public API's writes (v1.ts), which call this
+ * with the key's account. Answers with the whole state, or { error } and a status.
+ */
+export async function act(env: Env, me: AccountRow, path: string, method: string, b: Record<string, unknown>, url: URL, request: Request): Promise<Response> {
+	const db = env.DB;
+	const owner = me.role === "owner";
+	const inst = await install(db);
+	const ctx = { ...(await contextOf(env)), link: `${url.origin}/`, helloName: url.hostname };
+	const reply = async (extra: Record<string, unknown> = {}) => json({ ...(await everything(env, me, url.origin)), ...extra });
 	const limits = await limitsOf(db, me);
 
 	// -- Monitors --
@@ -401,7 +431,7 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		if (method === "DELETE") {
 			await db.batch([
 				db.prepare("DELETE FROM notices WHERE page_id IN (SELECT id FROM pages WHERE account_id = ?)").bind(cl[1]),
-				...["pages", "monitors", "channels", "alerts"].map((t) => db.prepare(`DELETE FROM ${t} WHERE account_id = ?`).bind(cl[1])),
+				...["pages", "monitors", "channels", "alerts", "api_keys", "oauth_codes", "oauth_tokens"].map((t) => db.prepare(`DELETE FROM ${t} WHERE account_id = ?`).bind(cl[1])),
 				db.prepare("DELETE FROM accounts WHERE id = ?").bind(cl[1]),
 			]);
 			return reply();
