@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import {
-	alertFor, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
-	pageOutcome, payloadFor, rawEmail, rdapExpiry, reminderDue, remindersPassed, step, statusOf, uptime, verifyStripe, type MailIo, type State,
+	alertFor, certAlert, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
+	pageOutcome, payloadFor, rawEmail, rdapExpiry, reminderDue, remindersPassed, renewalAlert, step, statusOf, uptime, verifyStripe, webhookHeaders, type MailIo, type State,
 } from "../src/core.ts";
 
 const at = (s: string) => new Date(s);
@@ -171,4 +171,24 @@ test("Stripe webhook signatures", async () => {
 	assert.equal(await verifyStripe("whsec_test", `t=${t},v1=${sig}`, body, t * 1000), true);
 	assert.equal(await verifyStripe("whsec_test", `t=${t},v1=${sig}`, body + " ", t * 1000), false);
 	assert.equal(await verifyStripe("whsec_test", `t=${t},v1=${sig}`, body, (t + 600) * 1000), false);
+});
+
+// -- 1.2.0: webhook events and signatures --------------------------------------------------------
+
+test("each alert names its webhook event", () => {
+	const m = { kind: "website" as const, name: "Shop", url: "https://example.com/", host: null, port: null, every: 5 };
+	const now = new Date("2026-11-04T12:00:00Z");
+	assert.equal(alertFor(m, { kind: "down", why: "it timed out", since: "2026-11-04T11:50:00Z" }, "UTC", "https://w/").type, "monitor.down");
+	assert.equal(alertFor(m, { kind: "up", outage: { from: "2026-11-04T11:50:00Z", to: "2026-11-04T12:00:00Z", why: "" } }, "UTC", "https://w/").type, "monitor.up");
+	assert.equal(certAlert({ expires: "2026-11-10T00:00:00Z", issuer: null, host: "example.com", checkedAt: "", issued: "", auto: false }, now, "https://w/").type, "cert.expiring");
+	assert.equal(renewalAlert({ domain: "example.com", expires: "2026-11-30T00:00:00Z", registrar: null, checkedAt: "" }, now, "https://w/").type, "domain.expiring");
+});
+
+test("webhook signature checks out the same way as Mail App's", async () => {
+	const body = '{"type":"monitor.down"}';
+	const h = await webhookHeaders("whsec_test", "monitor.down", "evt_1", body, 1_760_520_601_000);
+	const parts = Object.fromEntries(h["site-watch-signature"].split(",").map((p: string) => p.split("=")));
+	assert.equal(parts.t, "1760520601");
+	assert.equal(parts.v1, createHmac("sha256", "whsec_test").update(`${parts.t}.${body}`).digest("hex"));
+	assert.equal(h["x-sitewatch-signature"], `sha256=${parts.v1}`);
 });

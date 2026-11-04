@@ -566,7 +566,23 @@ export const timeIn = (isoDate: string, tz: string) => {
 };
 export const dateOf = (isoDate: string) => new Date(isoDate).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
 
-export interface Alert { subject: string; text: string; urgent: boolean }
+/** type names the event for webhooks and the API, such as monitor.down (see WEBHOOK_TYPES). */
+export interface Alert { subject: string; text: string; urgent: boolean; type?: WebhookType }
+
+/** What each webhook event means. Your own webhook gets one of these as `type`. */
+export const WEBHOOK_TYPES = {
+	"monitor.down": "Something stopped working, after two checks in a row (or a heartbeat is late).",
+	"monitor.up": "It's working again after a down alert.",
+	"monitor.flapping": "It went down and came back 3 times in an hour.",
+	"monitor.blocked": "The server turned our checks away, so we can't tell whether it's working.",
+	"monitor.cert": "A website or server's certificate is broken or has run out.",
+	"cert.expiring": "A website's certificate runs out soon.",
+	"domain.expiring": "A domain's registration runs out soon.",
+	"alert.test": "The Send a test alert button.",
+	"test": "A channel's Test button.",
+} as const;
+export type WebhookType = keyof typeof WEBHOOK_TYPES;
+const EVENT_TYPE: Record<Event["kind"], WebhookType> = { down: "monitor.down", up: "monitor.up", flapping: "monitor.flapping", blocked: "monitor.blocked", cert: "monitor.cert" };
 
 const ADVICE: Record<Kind, string> = {
 	website: "Worth checking: your hosting company's status page, whether a payment for the hosting has failed, and any recent change to the website or its DNS records. If it works for you, a firewall or security plugin may be blocking Cloudflare's addresses.",
@@ -577,6 +593,10 @@ const ADVICE: Record<Kind, string> = {
 
 /** The alert for one event, in plain words. `tz` is the time zone from Settings. */
 export function alertFor(m: MonitorLike & { every: number }, e: Event, tz: string, link: string, app = "Site Watch"): Alert {
+	return { ...alertText(m, e, tz, link, app), type: EVENT_TYPE[e.kind] };
+}
+
+function alertText(m: MonitorLike & { every: number }, e: Event, tz: string, link: string, app: string): Alert {
 	const label = labelOf(m);
 	const what = m.kind === "website" ? m.url : m.kind === "heartbeat" ? `the "${label}" heartbeat` : `${m.host} port ${m.port}`;
 	const end = `Open ${app}: ${link}`;
@@ -632,6 +652,7 @@ export function certAlert(cert: Cert, now: Date, link: string, app = "Site Watch
 		? `This is a short-lived certificate that renews itself${cert.issuer ? ` (${cert.issuer} certificates normally renew about a month before they run out)` : ""}. It hasn't renewed yet, so the automatic renewal may have failed. If the website is on Cloudflare, check SSL/TLS › Edge Certificates in the dashboard. Otherwise ask your web host.`
 		: "Ask your web host to renew it. If the website is on Cloudflare, check SSL/TLS › Edge Certificates in the dashboard.";
 	return {
+		type: "cert.expiring",
 		subject: days < 0 ? `Certificate expired: ${cert.host}` : `Certificate expires in ${days} day${days === 1 ? "" : "s"}: ${cert.host}`,
 		urgent: days <= 7,
 		text: [
@@ -646,6 +667,7 @@ export function renewalAlert(reg: Registration, now: Date, link: string, app = "
 	const days = daysLeft(reg.expires!, now);
 	const when = dateOf(reg.expires!);
 	return {
+		type: "domain.expiring",
 		subject: days < 0 ? `Domain expired: ${reg.domain}` : days === 0 ? `Domain expires today: ${reg.domain}` : `Domain expires in ${days} day${days === 1 ? "" : "s"}: ${reg.domain}`,
 		urgent: days <= 7,
 		text: [
@@ -692,7 +714,43 @@ export function cleanChannel(raw: unknown): { kind: ChannelKind; name: string; u
 	return { kind, name: cleanName(b.name) ?? CHANNEL_NAMES[kind], url: url.toString().slice(0, 1000) };
 }
 
-export interface HookEvent { event: "alert" | "test"; subject: string; text: string; urgent: boolean; url: string | null; sentAt: string; app?: string }
+/** What a webhook knows about the thing an alert is about. */
+export interface HookMonitor { id: string; kind: Kind; label: string; url: string | null; host: string | null; port: number | null }
+
+/**
+ * One alert, as your own webhook gets it. event, subject, text, urgent, url, sentAt and app were there from 1.0.0;
+ * id, type, created and monitor came in 1.2.0, so webhooks look the same as Mail App's and DMARC Reports'.
+ */
+export interface HookEvent {
+	event: "alert" | "test"; subject: string; text: string; urgent: boolean; url: string | null; sentAt: string; app?: string;
+	id?: string; type?: WebhookType; created?: string; monitor?: HookMonitor | null;
+}
+
+/** HMAC-SHA256 of "<timestamp>.<body>" with the webhook's secret, as hex. The same as Mail App and DMARC Reports. */
+const hexOf = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+
+export async function signBody(secret: string, timestamp: string, body: string): Promise<string> {
+	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	return hexOf(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${timestamp}.${body}`)));
+}
+
+/**
+ * The headers your own webhook gets. Site-Watch-Signature (t=...,v1=...) matches Mail App and DMARC Reports, so one
+ * check works for all three. X-SiteWatch-Timestamp and X-SiteWatch-Signature (sha256=...) are kept from 1.0.0.
+ */
+export async function webhookHeaders(secret: string, type: string, delivery: string, body: string, now = Date.now()): Promise<Record<string, string>> {
+	const ts = String(Math.floor(now / 1000));
+	const sig = await signBody(secret, ts, body);
+	return {
+		"site-watch-event": type,
+		"site-watch-delivery": delivery,
+		"site-watch-signature": `t=${ts},v1=${sig}`,
+		"x-sitewatch-timestamp": ts,
+		"x-sitewatch-signature": `sha256=${sig}`,
+	};
+}
+
+export const hookMonitor = (m: MonitorLike & { id: string }): HookMonitor => ({ id: m.id, kind: m.kind, label: labelOf(m), url: m.url, host: m.host, port: m.port });
 
 const short = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
 

@@ -3,6 +3,8 @@
 //
 //   /                    the app (set-up, sign-in and the dashboard are one page: ui.ts)
 //   /api/*               its JSON (api.ts, api-auth.ts, billing.ts)
+//   /api/v1/*            the public API, with an API key (v1.ts, keys.ts)
+//   /mcp                 the AI connector (mcp.ts), with its OAuth sign-in (connect.ts, oauth.ts)
 //   /hb/<code>           a scheduled job checking in (no sign-in: the code is the secret)
 //   /status/<address>    public status pages (status.ts), or / on a status page's own domain
 //   /stripe/webhook      Stripe, when selling to clients is on (billing.ts)
@@ -14,10 +16,12 @@ import { handleApi } from "./api.ts";
 import { contextOf, runScheduled } from "./cron.ts";
 import { alertFor, iso, isDown, step, stateOf } from "./core.ts";
 import { accountById, ensureSchema, install, isLive, type Env, type MonitorRow } from "./db.ts";
+import { handleConnector, isConnectorPath } from "./connect.ts";
 import { findPage, renderStatus } from "./status.ts";
+import { handleV1 } from "./v1.ts";
 import { appPage } from "./ui.ts";
 
-const VERSION = "1.1.0";
+const VERSION = "1.2.0";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -62,6 +66,16 @@ export default {
 
 		const hb = /^\/hb\/([0-9a-f]{32})\/?$/.exec(path);
 		if (hb) return heartbeat(env, hb[1], ctx);
+
+		if (path === "/api/v1" || path.startsWith("/api/v1/")) {
+			try {
+				return withHeaders(await handleV1(request, env, url));
+			} catch (e) {
+				console.error(e);
+				return withHeaders(Response.json({ error: "Something went wrong on our side. Please try again.", docs: "https://paulobrien.dev/watch/api/" }, { status: 500 }));
+			}
+		}
+		if (isConnectorPath(path)) return withHeaders(await handleConnector(request, env, url, VERSION));
 
 		if (path.startsWith("/api/") || path === "/stripe/webhook") {
 			try {

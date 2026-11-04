@@ -3,30 +3,20 @@
 // and a daily cap stops a server that keeps going up and down from flooding anyone.
 
 import { EmailMessage } from "cloudflare:email";
-import { CHANNEL_KINDS, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
-import { install, newId, type AccountRow, type Env } from "./db.ts";
+import { CHANNEL_KINDS, hookMonitor, webhookHeaders, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
+import { install, newId, type AccountRow, type Env, type MonitorRow } from "./db.ts";
 
 interface ChannelRow { id: number; kind: string; name: string; url: string; secret: string | null; on_off: number; fails: number }
-
-const hex = (b: ArrayBuffer) => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
-
-async function signature(secret: string, timestamp: string, body: string): Promise<string> {
-	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-	return `sha256=${hex(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${timestamp}.${body}`)))}`;
-}
 
 export const newSecret = () => `whsec_${newId(24)}`;
 
 /** Posts to one channel. True when the service took it. Your own webhook's posts are signed with its secret. */
 export async function postTo(c: Pick<ChannelRow, "kind" | "url" | "secret">, e: HookEvent): Promise<boolean> {
 	const kind = (CHANNEL_KINDS.includes(c.kind as ChannelKind) ? c.kind : "webhook") as ChannelKind;
-	const body = JSON.stringify(payloadFor(kind, e));
+	const full: HookEvent = { ...e, id: e.id ?? `evt_${newId(12)}`, type: e.type ?? (e.event === "test" ? "test" : "alert.test"), created: e.sentAt, monitor: e.monitor ?? null };
+	const body = JSON.stringify(payloadFor(kind, full));
 	const headers: Record<string, string> = { "content-type": "application/json", "user-agent": "SiteWatch/1.0" };
-	if (kind === "webhook" && c.secret) {
-		const ts = String(Math.floor(Date.now() / 1000));
-		headers["x-sitewatch-timestamp"] = ts;
-		headers["x-sitewatch-signature"] = await signature(c.secret, ts, body);
-	}
+	if (kind === "webhook" && c.secret) Object.assign(headers, await webhookHeaders(c.secret, full.type!, full.id!, body));
 	try {
 		const res = await fetch(c.url, { method: "POST", headers, body, signal: AbortSignal.timeout(10_000) });
 		await res.body?.cancel();
@@ -63,7 +53,11 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 			sent.push(problem ? "email failed" : "email");
 		}
 		const { results } = await db.prepare("SELECT * FROM channels WHERE account_id = ? AND on_off = 1").bind(account.id).all<ChannelRow>();
-		const e: HookEvent = { event: "alert", subject: alert.subject, text: alert.text, urgent: alert.urgent, url: link, sentAt: iso(now), app: inst.brand.name };
+		const row = monitorId ? await db.prepare("SELECT * FROM monitors WHERE id = ?").bind(monitorId).first<MonitorRow>() : null;
+		const e: HookEvent = {
+			event: "alert", subject: alert.subject, text: alert.text, urgent: alert.urgent, url: link, sentAt: iso(now), app: inst.brand.name,
+			id: `evt_${newId(12)}`, type: alert.type ?? "alert.test", monitor: row ? hookMonitor(row) : null,
+		};
 		for (const c of results) {
 			const ok = await postTo(c, e);
 			sent.push(ok ? c.name : `${c.name} failed`);
