@@ -17,7 +17,7 @@ import { accountById, ensureSchema, install, isLive, type Env, type MonitorRow }
 import { findPage, renderStatus } from "./status.ts";
 import { appPage } from "./ui.ts";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
