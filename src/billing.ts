@@ -9,6 +9,7 @@ import { json } from "./api-auth.ts";
 import { hashPassword, passwordProblem, sessionCookie } from "./auth.ts";
 import { cleanEmail, cleanName, iso, verifyStripe } from "./core.ts";
 import { install, newId, type AccountRow, type Env, type PlanRow } from "./db.ts";
+import { ROBOT_ERROR, turnstileOk } from "./turnstile.ts";
 
 const API = "https://api.stripe.com/v1";
 
@@ -71,6 +72,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 	if (path === "/api/signup") {
 		if (!(await sellingOn(env))) return json({ error: "Sign-up isn't open." }, 403);
 		const b = await request.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+		if (!(await turnstileOk(env, request, b.ts))) return json({ error: ROBOT_ERROR }, 403);
 		const email = cleanEmail(b.email);
 		if (!email) return json({ error: "Please enter your email address." }, 400);
 		const problem = passwordProblem(b.password);

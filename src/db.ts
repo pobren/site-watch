@@ -13,6 +13,9 @@ export interface Env {
 	/** Sell to clients: your own Stripe keys, as secrets on the Worker. Payments go straight to your Stripe account. */
 	STRIPE_SECRET_KEY?: string;
 	STRIPE_WEBHOOK_SECRET?: string;
+	/** Optional Cloudflare Turnstile on sign in, set-up, forgotten password and sign-up (turnstile.ts): both are needed. */
+	TURNSTILE_SITE_KEY?: string;
+	TURNSTILE_SECRET?: string;
 }
 
 export interface MonitorRow {
