@@ -5,6 +5,10 @@ name: Release
 
 on:
   workflow_dispatch:
+    inputs:
+      otp:
+        description: "npm one-time code (only if npm asks for one)"
+        required: false
 
 permissions:
   contents: write
@@ -37,7 +41,8 @@ jobs:
         # exist yet). After that, trusted publishing takes over and the secret can be deleted.
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm install -g npm@11 && npm publish --provenance --access public
+          OTP: ${{ inputs.otp }}
+        run: npm install -g npm@11 && npm publish --provenance --access public ${OTP:+--otp=$OTP}
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
