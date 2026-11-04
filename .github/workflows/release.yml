@@ -33,6 +33,10 @@ jobs:
       - run: npm run package
       - name: Publish to npm
         working-directory: npm
+        # The very first publish needs an NPM_TOKEN secret (npm can't trust a workflow for a package that doesn't
+        # exist yet). After that, trusted publishing takes over and the secret can be deleted.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm install -g npm@11 && npm publish --provenance --access public
       - name: GitHub release
         env:
