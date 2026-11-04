@@ -109,7 +109,7 @@ The checks visit your pages with the user agent `SiteWatch/1.0`. If a firewall o
 Site Watch is source available under the [Business Source License 1.1](LICENSE). In plain English:
 
 - **Free** for one person or organisation's own websites, up to 10 (with their mail servers, ports and heartbeats).
-- **Needs a commercial licence:** going over 10 websites, running it for clients or other people, or offering it as a hosted, managed or white-label service. [Talk to us](https://paulobrien.dev/contact/) (choose "Work together").
+- **Needs a commercial licence:** going over 10 websites, running it for clients or other people, or offering it as a hosted, managed or white-label service. [Talk to us](https://paulobrien.dev/contact/) (choose "Let's work together").
 - Each version becomes Apache 2.0 four years after it's released.
 
 There's no licence key and nothing in the app stops you. We trust you. The [LICENSE](LICENSE) file is the legal text.
