@@ -37,10 +37,8 @@ jobs:
       - run: npm run package
       - name: Publish to npm
         working-directory: npm
-        # The very first publish needs an NPM_TOKEN secret (npm can't trust a workflow for a package that doesn't
-        # exist yet). After that, trusted publishing takes over and the secret can be deleted.
+        # npm trusted publishing (set on npmjs.com for this repo and release.yml), so no token is needed.
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           OTP: ${{ inputs.otp }}
         run: npm install -g npm@11 && npm publish --provenance --access public ${OTP:+--otp=$OTP}
       - name: GitHub release
