@@ -88,6 +88,15 @@ Cloudflare sends the emails through Email Routing, free.
 
 Each address alerts go to must be verified in step 2. Password reset emails for clients need this too.
 
+## Robot check (optional)
+
+Sign-in, set-up, forgotten password and client sign-up can use [Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/), Cloudflare's free check that a person is using the form. Most people see nothing; a few are asked to tick a box. Wrong passwords are already limited, so this is an extra layer.
+
+1. In Cloudflare, open **Turnstile** and add a widget. Use your Site Watch address as its hostname and choose **Managed**.
+2. On the Worker, open **Settings › Variables and Secrets** and add two secrets: `TURNSTILE_SITE_KEY` (the site key) and `TURNSTILE_SECRET` (the secret key). Add both as secrets, so updates keep them. From the code: `npx wrangler secret put TURNSTILE_SITE_KEY` and `npx wrangler secret put TURNSTILE_SECRET`.
+
+It switches on once both are there. Remove either one to switch it off.
+
 ## Selling to clients
 
 1. In Stripe, make a product for each plan with a monthly or yearly price.

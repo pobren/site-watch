@@ -39,6 +39,7 @@ h1{font-size:30px;line-height:1.2;margin:0 0 6px}h2{font-size:22px;margin:0 0 12
 .btn.danger{color:var(--down)}.btn.small{padding:6px 10px;min-height:36px;font-size:14px}
 .btn:disabled{opacity:.6;cursor:wait}
 .btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+
 label{display:block;font-weight:700;margin:14px 0 6px}
 .hint{font-weight:400;color:var(--soft);font-size:14px;margin-top:4px}
 input,select,textarea{width:100%;font:inherit;padding:10px 12px;border:1px solid #cbd5e1;border-radius:10px;background:#fff;color:var(--ink)}
@@ -181,39 +182,73 @@ function copyBox(value) {
 
 // -- Before sign-in ----------------------------------------------------------------------
 
+// Cloudflare Turnstile under a form, when the owner has switched it on (whoami gives the site key). Cloudflare's
+// script loads the first time a form needs it. Most people see nothing; a few are asked to tick a box.
+let tsApi = null;
+function tsLoad() {
+	return tsApi || (tsApi = new Promise((ok, bad) => {
+		window.swTsReady = () => ok(window.turnstile);
+		const s = document.createElement("script");
+		s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=swTsReady";
+		s.async = true;
+		s.onerror = () => { tsApi = null; bad(new Error("load")); };
+		document.head.append(s);
+	}));
+}
+/** Adds the widget to a form. Returns a function that gives a fresh answer for the next try ("" if none came). */
+function robotCheck(form) {
+	const key = who && who.turnstile;
+	if (!key) return async () => undefined;
+	const box = h("div", { class: "ts-box" });
+	form.querySelector(".btns").before(box);
+	let id = null, token = "";
+	const waiting = [];
+	const hand = (v) => waiting.splice(0).forEach((f) => f(v));
+	tsLoad().then((t) => { id = t.render(box, { sitekey: key, appearance: "interaction-only", callback: (v) => { token = v; hand(v); }, "expired-callback": () => { token = ""; }, "error-callback": () => hand("") }); }).catch(() => hand(""));
+	return () => new Promise((ok) => {
+		const give = (v) => { token = ""; if (id !== null) setTimeout(() => window.turnstile.reset(id), 0); ok(v); };
+		if (token) return give(token);
+		const timer = setTimeout(() => give(""), 20000);
+		waiting.push((v) => { clearTimeout(timer); give(v); });
+	});
+}
+
 function centre(...kids) { app.replaceChildren(h("main", null, h("div", { class: "centre" }, h("div", { style: "margin-bottom:20px" }, logo()), ...kids))); }
 
 function setupView() {
 	const code = new URLSearchParams(location.search).get("setup") || new URLSearchParams(location.search).get("code") || "";
 	const email = h("input", { type: "email", autocomplete: "email", required: true });
 	const pw = h("input", { type: "password", autocomplete: "new-password", minlength: 10, required: true });
-	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button"), async () => { await api("/api/setup", { code, email: email.value, password: pw.value, tz: tz() }); location.href = "/"; }); } },
+	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button"), async () => { await api("/api/setup", { code, email: email.value, password: pw.value, tz: tz(), ts: await robot() }); location.href = "/"; }); } },
 		h("h1", null, who.hasOwner ? "Reset the owner's password" : "Set up " + brand().name),
 		h("p", { class: "lead" }, who.hasOwner ? "This link can choose a new email address and password for the owner's account." : "Make your account. You'll sign in with this email address and password."),
 		!code ? msg("err", "This link has no set-up code. Open /setup?code= followed by the SETUP_TOKEN secret you chose.") : null,
 		field("Your email address", email, "Alerts go here too. You can change that later."),
 		field("Choose a password", pw, "At least 10 characters."),
 		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("check"), who.hasOwner ? "Save and sign in" : "Make my account")));
+	const robot = robotCheck(card);
 	centre(card);
 }
 
 function signinView(note) {
 	const email = h("input", { type: "email", autocomplete: "email", required: true });
 	const pw = h("input", { type: "password", autocomplete: "current-password", required: true });
-	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { await api("/api/signin", { email: email.value, password: pw.value }); history.replaceState(null, "", "/"); start(); }); } },
+	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { await api("/api/signin", { email: email.value, password: pw.value, ts: await robot() }); history.replaceState(null, "", "/"); start(); }); } },
 		h("h1", null, "Sign in"),
 		note ? msg("ok", note) : null,
 		field("Email address", email), field("Password", pw),
 		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("in"), "Sign in"), btn("Forgotten your password?", "key", forgotView)),
 		who && who.sell ? h("p", null, "New here? ", h("a", { href: "/signup" }, "Choose a plan and sign up")) : null);
+	const robot = robotCheck(card);
 	centre(card);
 }
 
 function forgotView() {
 	const email = h("input", { type: "email", autocomplete: "email", required: true });
-	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { const r = await api("/api/forgot", { email: email.value }); card.replaceChildren(h("h1", null, "Check your email"), h("p", null, "If there's an account for that address, we've sent a link to choose a new password. It works for an hour."), r.owner ? h("p", { class: "hint" }, "Email isn't set up on this install yet. The owner can reset their password with their set-up link instead.") : null, h("div", { class: "btns" }, btn("Back to sign in", "in", () => signinView()))); }); } },
+	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { const r = await api("/api/forgot", { email: email.value, ts: await robot() }); card.replaceChildren(h("h1", null, "Check your email"), h("p", null, "If there's an account for that address, we've sent a link to choose a new password. It works for an hour."), r.owner ? h("p", { class: "hint" }, "Email isn't set up on this install yet. The owner can reset their password with their set-up link instead.") : null, h("div", { class: "btns" }, btn("Back to sign in", "in", () => signinView()))); }); } },
 		h("h1", null, "Choose a new password"), field("Your email address", email),
 		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("send"), "Send me a link"), btn("Back", "in", () => signinView())));
+	const robot = robotCheck(card);
 	centre(card);
 }
 
@@ -238,11 +273,12 @@ async function signupView() {
 	const name = h("input", { autocomplete: "organization" });
 	const email = h("input", { type: "email", autocomplete: "email", required: true });
 	const pw = h("input", { type: "password", autocomplete: "new-password", minlength: 10, required: true });
-	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { const r = await api("/api/signup", { plan: chosen, name: name.value, email: email.value, password: pw.value, tz: tz() }); location.href = r.checkout; }); } },
+	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { const r = await api("/api/signup", { plan: chosen, name: name.value, email: email.value, password: pw.value, tz: tz(), ts: await robot() }); location.href = r.checkout; }); } },
 		h("h1", null, "Sign up"), h("p", { class: "lead" }, "Choose a plan, make your account, then pay securely with Stripe."), tiles,
 		field("Your name or business", name), field("Email address", email, "You'll sign in with it, and alerts go here."), field("Choose a password", pw, "At least 10 characters."),
 		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("card"), "Continue to payment")),
 		h("p", null, "Already have an account? ", h("a", { href: "/signin" }, "Sign in")));
+	const robot = robotCheck(card);
 	centre(card);
 }
 

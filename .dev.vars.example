@@ -1,1 +1,4 @@
 SETUP_TOKEN=replace-this-with-your-own-long-secret-code
+# Optional: Cloudflare Turnstile on sign-in (both needed). These are Cloudflare's test keys, which always pass.
+# TURNSTILE_SITE_KEY=1x00000000000000000000AA
+# TURNSTILE_SECRET=1x0000000000000000000000000000000AA

@@ -3,6 +3,7 @@
 import { sendEmail } from "./alerts.ts";
 import { checkPassword, clearCookie, clearFailures, currentAccount, hashPassword, noteFailure, passwordProblem, sessionCookie, setupCodeMatches, signOutEverywhere, tooManyTries } from "./auth.ts";
 import { cleanEmail, iso } from "./core.ts";
+import { ROBOT_ERROR, turnstileKey, turnstileOk } from "./turnstile.ts";
 import { install, newId, type AccountRow, type Env } from "./db.ts";
 
 export const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -28,13 +29,14 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 		const owner = await db.prepare("SELECT 1 FROM accounts WHERE role = 'owner'").first();
 		const me = await currentAccount(request, db);
 		const inst = await install(db);
-		return json({ signedIn: !!me, role: me?.role ?? null, hasOwner: !!owner, brand: inst.brand, sell: inst.sell && !!env.STRIPE_SECRET_KEY });
+		return json({ signedIn: !!me, role: me?.role ?? null, hasOwner: !!owner, brand: inst.brand, sell: inst.sell && !!env.STRIPE_SECRET_KEY, turnstile: turnstileKey(env) });
 	}
 	if (request.method !== "POST") return null;
 
 	if (path === "/api/setup") {
 		// Makes the owner's account, or resets the owner's password with the same link.
 		const b = await read(request);
+		if (!(await turnstileOk(env, request, b.ts))) return json({ error: ROBOT_ERROR }, 403);
 		if (!setupCodeMatches(env.SETUP_TOKEN, b.code)) return json({ error: "That set-up link isn't right. Check the SETUP_TOKEN secret on the Worker in Cloudflare and use the link with that code." }, 403);
 		const email = cleanEmail(b.email);
 		if (!email) return json({ error: "Please enter your email address. You'll sign in with it." }, 400);
@@ -55,6 +57,7 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 
 	if (path === "/api/signin") {
 		const b = await read(request);
+		if (!(await turnstileOk(env, request, b.ts))) return json({ error: ROBOT_ERROR }, 403);
 		const email = cleanEmail(b.email);
 		if (!email) return json({ error: "Please enter your email address." }, 400);
 		if (await tooManyTries(db, email)) return json({ error: "Too many wrong passwords. Please wait 15 minutes and try again." }, 429);
@@ -72,6 +75,7 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 	if (path === "/api/forgot") {
 		// Always the same answer, so nobody can find out who has an account.
 		const b = await read(request);
+		if (!(await turnstileOk(env, request, b.ts))) return json({ error: ROBOT_ERROR }, 403);
 		const email = cleanEmail(b.email);
 		const inst = await install(db);
 		const a = email ? await db.prepare("SELECT * FROM accounts WHERE email = ?").bind(email).first<AccountRow>() : null;
