@@ -9,6 +9,7 @@
 - **Sign-up limits.** Each address can make 3 accounts a day, and you choose the most new accounts a day for everyone together.
 - **Lots of websites.** Add a Cloudflare Queue and checks run in batches, so thousands of websites can be checked every minute instead of about 40.
 - **Your own home page.** Add static files and people who aren't signed in see your home page at /, with sign-in at /signin.
+- **Feels like an app on phones.** Tabs along the bottom, a big status card that turns red when something is down, and pull down to refresh. Add it to your Home Screen and it opens full screen.
 - **More white label.** Variables for the user agent websites see, the API guide link and the AI connector's name.
 
 ## 1.2.0: API, webhooks and AI connector

@@ -7,7 +7,7 @@ import type { Brand } from "./db.ts";
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 export function appPage(brand: Brand, version: string, docs = "https://paulobrien.dev/watch/api/"): string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="${esc(brand.name)}"><link rel="apple-touch-icon" href="/icon-192.png">
 <title>${esc(brand.name)}</title><meta name="robots" content="noindex">
 <link rel="icon" href="${brand.logo ? esc(brand.logo) : `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${brand.colour}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`)}`}">
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${esc(brand.colour)}">
@@ -77,6 +77,25 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px
 .plans{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
 .foot{color:var(--faint);font-size:13px;text-align:center;margin-top:32px}
 .spark{width:100%;height:40px;margin-top:8px}
+/* Feels like an app on phones: tabs along the bottom, a big status card, pull down to refresh. */
+.status{border-radius:22px;padding:22px;margin-bottom:16px;color:#fff;display:flex;gap:16px;align-items:center;background:var(--up)}
+.status.s-down{background:var(--down)}.status.s-warn{background:var(--warn)}
+.status .big{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.2);display:grid;place-items:center;flex:none}
+.status h1{margin:0;color:#fff}.status p{margin:2px 0 0;opacity:.9}
+.tabbar{display:none}
+.ptr{position:fixed;left:50%;top:0;transform:translate(-50%,-60px);z-index:20;background:#fff;border:1px solid var(--line);border-radius:999px;padding:8px 14px;font-weight:700;font-size:14px;color:var(--soft);box-shadow:0 6px 20px rgba(15,23,42,.12);display:flex;gap:6px;align-items:center;transition:transform .15s}
+@media(max-width:720px){
+ .top nav{display:none}
+ .top .in{padding-top:max(12px,env(safe-area-inset-top))}
+ main{padding-bottom:calc(96px + env(safe-area-inset-bottom))}
+ .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:10;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom))}
+ .tabbar button{flex:1;background:none;border:0;font:inherit;font-size:11px;font-weight:700;color:var(--faint);display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;cursor:pointer;min-width:0}
+ .tabbar button,.tabbar button.on{background:none;padding:6px 0;border-radius:0}
+ .tabbar button.on{color:var(--brand)}
+ .tabbar button.add svg{background:var(--brand);color:#fff;border-radius:12px;padding:6px;width:36px;height:36px;margin:-10px 0 0}
+ .stats{grid-template-columns:repeat(2,1fr)}
+ .card{border-radius:18px}
+}
 @media(max-width:640px){.two{grid-template-columns:1fr}.mon{grid-template-columns:auto 1fr}.mon .acts{grid-column:1/-1}.bars i:nth-child(-n+60){display:none}h1{font-size:26px}}
 `;
 
@@ -102,6 +121,7 @@ const ICONS = {
 	copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
 	send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
 	check: '<path d="M20 6 9 17l-5-5"/>',
+	alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
 	save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
 	out: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
 	in: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
@@ -334,8 +354,32 @@ function shell(content) {
 	if (state.me.role === "owner") tabs.push(["admin", "Admin", "cog"]);
 	app.replaceChildren(
 		h("div", { class: "top" }, h("div", { class: "in" }, logo(), h("nav", null, tabs.map(([id, label, ic]) => h("button", { class: tab === id ? "on" : "", onclick: () => go(id) }, icon(ic), label))))),
-		h("main", null, flashText ? msg("ok", flashText) : null, content, h("p", { class: "foot" }, brand().name + " " + window.SW.version)));
+		h("main", null, flashText ? msg("ok", flashText) : null, content, h("p", { class: "foot" }, brand().name + " " + window.SW.version)),
+		h("nav", { class: "tabbar", "aria-label": "Sections" }, tabs.map(([id, label, ic]) => h("button", { class: (tab === id ? "on " : "") + (id === "add" ? "add" : ""), "aria-current": tab === id ? "page" : null, onclick: () => go(id) }, icon(ic, id === "add" ? 36 : 24), SHORT[id] || label))));
 }
+const SHORT = { overview: "Watching", pages: "Pages" };
+
+// Pull down from the top of the page to check for news, like a phone app.
+let pullY = null, pullBox = null;
+window.addEventListener("touchstart", (e) => { pullY = state && window.scrollY <= 0 && e.touches.length === 1 ? e.touches[0].clientY : null; }, { passive: true });
+window.addEventListener("touchmove", (e) => {
+	if (pullY === null) return;
+	const d = e.touches[0].clientY - pullY;
+	if (!pullBox) { pullBox = h("div", { class: "ptr", role: "status" }, icon("refresh", 16), "Pull to refresh"); document.body.append(pullBox); }
+	pullBox.style.transform = "translate(-50%," + (Math.min(d, 90) - 60) + "px)";
+	pullBox.lastChild.textContent = d > 70 ? "Let go to refresh" : "Pull to refresh";
+}, { passive: true });
+window.addEventListener("touchend", async (e) => {
+	if (pullY === null || !pullBox) { pullY = null; return; }
+	const d = e.changedTouches[0].clientY - pullY, box = pullBox;
+	pullY = null; pullBox = null;
+	if (d > 70) {
+		box.lastChild.textContent = "Refreshing…"; box.style.transform = "translate(-50%,16px)";
+		try { state = await api("/api/state"); draw(); } catch {}
+	}
+	box.style.transform = "translate(-50%,-60px)"; setTimeout(() => box.remove(), 200);
+});
+
 function go(t) { tab = t; editing = null; newKey = null; location.hash = t; draw(); window.scrollTo(0, 0); }
 
 function draw() {
@@ -368,8 +412,12 @@ function overview() {
 	const count = (f) => m.filter(f).length;
 	const down = count((x) => x.status === "down"), probs = count((x) => ["cert", "blocked", "unsure"].includes(x.status));
 	const lic = state.admin && state.admin.licence;
+	const last = m.map((x) => x.checkedAt).filter(Boolean).sort().pop();
 	return h("div", null,
-		h("h1", null, down ? down + " down right now" : probs ? "Something needs a look" : "Everything's working"),
+		h("div", { class: "status" + (down ? " s-down" : probs ? " s-warn" : ""), role: "status" },
+			h("span", { class: "big" }, icon(down ? "alert" : probs ? "alert" : "check", 30)),
+			h("div", null, h("h1", null, down ? down + " down right now" : probs ? "Something needs a look" : "Everything's working"),
+				h("p", null, down ? "We keep checking and will tell you the moment it's back." : (last ? "Last checked " + ago(last) + "." : "Your first checks are on their way.")))),
 		h("p", { class: "lead" }, "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row."),
 		h("div", { class: "stats" }, h("div", { class: "stat" }, h("b", { class: "t-up" }, count((x) => x.status === "up")), h("span", null, "Working")), h("div", { class: "stat" }, h("b", { class: "t-down" }, down), h("span", null, "Down")), h("div", { class: "stat" }, h("b", { class: "t-unsure" }, probs), h("span", null, "Need a look")), h("div", { class: "stat" }, h("b", null, m.length), h("span", null, "Watching"))),
 		lic && lic.websites > lic.limit ? h("div", { class: "note" }, "You're watching " + lic.websites + " websites. The free licence covers one person or organisation's own websites, up to " + lic.limit + ". For more, ", h("a", { href: "https://paulobrien.dev/contact/", target: "_blank", rel: "noopener" }, "ask about a commercial licence"), ".") : null,
