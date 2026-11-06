@@ -5,6 +5,7 @@
 import { EmailMessage } from "cloudflare:email";
 import { CHANNEL_KINDS, hookMonitor, webhookHeaders, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
 import { install, newId, planById, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { brandedHtml, toneOf, type EmailLook } from "./email.ts";
 import { sendPush, type PushSub } from "./push.ts";
 import { WL } from "./whitelabel.ts";
 
@@ -43,11 +44,13 @@ export async function postTo(c: Pick<ChannelRow, "kind" | "url" | "secret">, e: 
 	}
 }
 
-/** Sends a plain text email. Null when Cloudflare took it, or what went wrong. */
-export async function sendEmail(env: Env, from: string, to: string, subject: string, text: string, fromName = "Site Watch"): Promise<string | null> {
+/** Sends an email in the install's brand (HTML with the plain text beside it). Null when Cloudflare took it, or what went wrong. */
+export async function sendEmail(env: Env, from: string, to: string, subject: string, text: string, fromName = "Site Watch", look: Partial<EmailLook> = {}): Promise<string | null> {
 	if (!env.EMAIL) return "email isn't set up on this install: the EMAIL binding is missing (see the README)";
 	try {
-		await env.EMAIL.send(new EmailMessage(from, to, rawEmail(from, to, subject, text, new Date(), newId(12), fromName)));
+		const inst = await install(env.DB);
+		const html = brandedHtml(subject, text, { home: inst.origin ? `${inst.origin}/` : null, ...look, brand: look.brand ?? inst.brand });
+		await env.EMAIL.send(new EmailMessage(from, to, rawEmail(from, to, subject, text, new Date(), newId(12), fromName, html)));
 		return null;
 	} catch (e) {
 		return e instanceof Error ? e.message : String(e);
@@ -68,7 +71,8 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 	} else {
 		const link = inst.origin ? `${inst.origin}/` : null;
 		if (account.alert_to && inst.alertFrom) {
-			const problem = await sendEmail(env, inst.alertFrom, account.alert_to, alert.subject, alert.text, inst.brand.name);
+			const problem = await sendEmail(env, inst.alertFrom, account.alert_to, alert.subject, alert.text, inst.brand.name,
+				{ brand: inst.brand, tone: toneOf(alert), footer: `You get these alerts because of your ${inst.brand.name} account. Choose where they go on the Alerts page.` });
 			sent.push(problem ? "email failed" : "email");
 		}
 		const { results } = await db.prepare("SELECT * FROM channels WHERE account_id = ? AND on_off = 1").bind(account.id).all<ChannelRow>();

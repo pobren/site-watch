@@ -79,7 +79,8 @@ export async function sendVerify(env: Env, a: Pick<AccountRow, "email" | "verify
 	if (!inst.alertFrom || !a.verify_token) return "email isn't set up";
 	const app = inst.brand.name;
 	return sendEmail(env, inst.alertFrom, a.email, `Confirm your email for ${app}`,
-		`Hello,\n\nPlease confirm this is your email address, so ${app} can start checking your website and send you alerts:\n\n${origin}/verify?token=${a.verify_token}\n\nIf you didn't sign up for ${app}, you can ignore this email and nothing more will be sent.\n\n${app}`, app);
+		`Hello,\n\nPlease confirm this is your email address, so ${app} can start checking your website and send you alerts.\n\n${origin}/verify?token=${a.verify_token}\n\nIf you didn't sign up for ${app}, you can ignore this email and nothing more will be sent.`, app,
+		{ button: "Confirm my email", footer: `If the button doesn't work, copy this link into your browser: ${origin}/verify?token=${a.verify_token}` });
 }
 
 async function checkout(env: Env, a: AccountRow, plan: PlanRow, origin: string, yearly = false): Promise<string> {

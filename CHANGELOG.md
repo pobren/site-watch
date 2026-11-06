@@ -1,5 +1,10 @@
 # Changes
 
+## 1.4.0: Branded emails
+
+- **Every email is branded.** Alerts, the confirm email and password resets go out as HTML in your name, logo and colour, with a button, and the plain text beside it. Down alerts get a red strip, back up a green one.
+- Mail apps don't show SVG pictures, so use a PNG logo address (https://) for the logo to appear in emails.
+
 ## 1.3.1: Free sign-up without Stripe
 
 - **Free plans work without Stripe.** Open sign-up and people can join your free plans straight away. Paid plans appear once the Stripe secrets are added.
