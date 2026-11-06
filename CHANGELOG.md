@@ -1,5 +1,10 @@
 # Changes
 
+## 1.3.1: Free sign-up without Stripe
+
+- **Free plans work without Stripe.** Open sign-up and people can join your free plans straight away. Paid plans appear once the Stripe secrets are added.
+- Clearer note on where alerts can go with Cloudflare Email Sending.
+
 ## 1.3.0: Browser alerts, a free plan and room for thousands of websites
 
 - **Browser alerts.** Turn on alerts on the Alerts tab and they pop up on your computer or phone, even with the page closed. Works in Chrome, Edge, Firefox and Safari, and on iPhone once the site is on the Home Screen. Nothing to sign up for: each install makes its own keys.

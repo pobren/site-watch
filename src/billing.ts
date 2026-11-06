@@ -14,7 +14,10 @@ import { ROBOT_ERROR, turnstileOk } from "./turnstile.ts";
 
 const API = "https://api.stripe.com/v1";
 
-export const sellingOn = async (env: Env) => !!env.STRIPE_SECRET_KEY && (await install(env.DB)).sell;
+/** Sign-up is open. Free plans work without Stripe; paid plans also need the Stripe keys. */
+export const sellingOn = async (env: Env) => (await install(env.DB)).sell;
+/** Payments can be taken: sign-up is open and the Stripe key is there. */
+export const paymentsOn = async (env: Env) => !!env.STRIPE_SECRET_KEY && (await install(env.DB)).sell;
 
 /** Stripe's API takes form fields, with nested ones as a[b][c]. */
 function form(params: Record<string, unknown>, prefix = ""): string[] {
@@ -39,8 +42,10 @@ export async function stripe<T = Record<string, unknown>>(env: Env, path: string
 	return data;
 }
 
-export async function livePlans(db: D1Database): Promise<PlanRow[]> {
-	return (await db.prepare("SELECT * FROM plans WHERE on_off = 1 AND (stripe_price IS NOT NULL OR free = 1) ORDER BY position, name").all<PlanRow>()).results;
+/** Plans people can choose. Without the Stripe key, only the free ones. */
+export async function livePlans(db: D1Database, paid = true): Promise<PlanRow[]> {
+	const sql = paid ? "(stripe_price IS NOT NULL OR free = 1)" : "free = 1";
+	return (await db.prepare(`SELECT * FROM plans WHERE on_off = 1 AND ${sql} ORDER BY position, name`).all<PlanRow>()).results;
 }
 
 export const publicPlan = (p: PlanRow) => ({
@@ -99,7 +104,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 	const db = env.DB;
 	if (path === "/api/plans" && request.method === "GET") {
 		if (!(await sellingOn(env))) return json({ plans: [] });
-		return json({ plans: (await livePlans(db)).map(publicPlan) });
+		return json({ plans: (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) });
 	}
 	if (path === "/stripe/webhook" && request.method === "POST") return webhook(request, env);
 	if (request.method !== "POST") return null;
@@ -112,7 +117,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 		if (!email) return json({ error: "Please enter your email address." }, 400);
 		const problem = passwordProblem(b.password);
 		if (problem) return json({ error: problem }, 400);
-		const plan = (await livePlans(db)).find((p) => p.id === b.plan);
+		const plan = (await livePlans(db, !!env.STRIPE_SECRET_KEY)).find((p) => p.id === b.plan);
 		if (!plan) return json({ error: "Please choose a plan." }, 400);
 		if (await db.prepare("SELECT 1 FROM accounts WHERE email = ?").bind(email).first()) return json({ error: "There's already an account for that email address. Please sign in instead." }, 409);
 		// A cap on new accounts a day, so a script can't fill the database, and a smaller one for each address.
@@ -168,7 +173,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 		return problem ? json({ error: `We couldn't send the email: ${problem}` }, 502) : json({ ok: true });
 	}
 	if (path === "/api/billing/checkout") {
-		if (!(await sellingOn(env))) return json({ error: "Payments aren't switched on." }, 403);
+		if (!(await paymentsOn(env))) return json({ error: "Payments aren't switched on." }, 403);
 		const b = await request.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
 		const plan = (await livePlans(db)).find((p) => p.id === (b.plan ?? me.plan));
 		if (!plan) return json({ error: "Please choose a plan." }, 400);

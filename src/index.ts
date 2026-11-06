@@ -25,7 +25,7 @@ import { findPage, renderStatus } from "./status.ts";
 import { handleV1 } from "./v1.ts";
 import { appPage } from "./ui.ts";
 
-const VERSION = "1.3.0";
+const VERSION = "1.3.1";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",

@@ -58,7 +58,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 	]);
 	const out: Record<string, unknown> = {
 		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified" },
-		plans: me.role === "client" ? (await livePlans(db)).map(publicPlan) : [],
+		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: c.kind === "push" ? new URL(c.url).hostname : maskUrl(c.url), secret: c.kind === "push" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
 		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: `${origin}/status/${p.slug}` })),
@@ -409,7 +409,6 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 			await setMeta(db, "signup_cap", String(n));
 		}
 		if ("sell" in b) {
-			if (b.sell && !env.STRIPE_SECRET_KEY) return bad("Add your STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET secrets to the Worker first (see the README).");
 			await setMeta(db, "sell", b.sell ? "1" : null);
 		}
 		return reply({ ok: true });
