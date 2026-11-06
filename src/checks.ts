@@ -5,7 +5,10 @@
 import { connect } from "cloudflare:sockets";
 import { certFromCt, connectWhy, domainOf, iso, mailDialog, mailPort, pageOutcome, rdapExpiry, type Cert, type CtEntry, type MailIo, type Outcome, type Registration, type Rules } from "./core.ts";
 
-export const AGENT = "Mozilla/5.0 (compatible; SiteWatch/1.0; +https://paulobrien.dev/watch/)";
+import { WL } from "./whitelabel.ts";
+
+/** What websites see in their logs (whitelabel.ts). */
+export const agent = () => WL.agent;
 const PAGE_TIMEOUT = 15;
 const SOCKET_TIMEOUT = 10;
 /** The most of a page we read when looking for words. */
@@ -32,7 +35,7 @@ async function readSome(res: Response): Promise<string> {
 export async function checkWebsite(url: string, rules: Rules): Promise<Result> {
 	const started = Date.now();
 	try {
-		const res = await fetch(url, { headers: { "user-agent": AGENT, accept: "text/html,*/*" }, redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT * 1000) });
+		const res = await fetch(url, { headers: { "user-agent": agent(), accept: "text/html,*/*" }, redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT * 1000) });
 		const ms = Date.now() - started;
 		const body = rules.contains || rules.missing ? await readSome(res) : (await res.body?.cancel(), "");
 		return { outcome: pageOutcome({ status: res.status, ms, body }, rules), ms };
@@ -129,7 +132,7 @@ export async function lookupCert(host: string, now: Date): Promise<Cert | null |
 
 async function fromCrtSh(host: string): Promise<CtEntry[] | undefined> {
 	try {
-		const res = await fetch(`https://crt.sh/?q=${encodeURIComponent(host)}&output=json&exclude=expired`, { headers: { "user-agent": AGENT }, signal: AbortSignal.timeout(20_000) });
+		const res = await fetch(`https://crt.sh/?q=${encodeURIComponent(host)}&output=json&exclude=expired`, { headers: { "user-agent": agent() }, signal: AbortSignal.timeout(20_000) });
 		if (!res.ok) return undefined;
 		const data = await res.json<CtEntry[]>();
 		return Array.isArray(data) ? data : undefined;
@@ -140,7 +143,7 @@ async function fromCrtSh(host: string): Promise<CtEntry[] | undefined> {
 
 async function fromCertSpotter(host: string): Promise<CtEntry[] | undefined> {
 	try {
-		const res = await fetch(`https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(host)}&expand=dns_names&expand=issuer`, { headers: { "user-agent": AGENT }, signal: AbortSignal.timeout(15_000) });
+		const res = await fetch(`https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(host)}&expand=dns_names&expand=issuer`, { headers: { "user-agent": agent() }, signal: AbortSignal.timeout(15_000) });
 		if (!res.ok) return undefined;
 		const data = await res.json<{ dns_names: string[]; not_before: string; not_after: string; issuer?: { name?: string } }[]>();
 		if (!Array.isArray(data)) return undefined;
@@ -154,7 +157,7 @@ async function fromCertSpotter(host: string): Promise<CtEntry[] | undefined> {
 export async function lookupRegistration(host: string, now: Date): Promise<Registration | undefined> {
 	const domain = domainOf(host);
 	try {
-		const res = await fetch(`https://rdap.org/domain/${encodeURIComponent(domain)}`, { headers: { accept: "application/rdap+json, application/json", "user-agent": AGENT }, redirect: "follow", signal: AbortSignal.timeout(15_000) });
+		const res = await fetch(`https://rdap.org/domain/${encodeURIComponent(domain)}`, { headers: { accept: "application/rdap+json, application/json", "user-agent": agent() }, redirect: "follow", signal: AbortSignal.timeout(15_000) });
 		if (res.status === 404) return { domain, expires: null, registrar: null, checkedAt: iso(now) };
 		if (!res.ok) return undefined;
 		return { domain, ...rdapExpiry(await res.json()), checkedAt: iso(now) };

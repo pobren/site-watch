@@ -1,5 +1,16 @@
 # Changes
 
+## 1.3.0: Browser alerts, a free plan and room for thousands of websites
+
+- **Browser alerts.** Turn on alerts on the Alerts tab and they pop up on your computer or phone, even with the page closed. Works in Chrome, Edge, Firefox and Safari, and on iPhone once the site is on the Home Screen. Nothing to sign up for: each install makes its own keys.
+- **Free plans.** When selling to clients, a plan can be free: no Stripe price, and people confirm their email address before their checks start. When a paid subscription ends, the client drops back to the free plan and anything over its limits is paused, not deleted.
+- **Yearly prices.** A plan can have a yearly Stripe price beside the monthly one. Sign-up and the Account tab offer both.
+- **Plan limits for alerts.** Each plan can cap alerts a day and choose where alerts can go: email only, email and browser, or every channel.
+- **Sign-up limits.** Each address can make 3 accounts a day, and you choose the most new accounts a day for everyone together.
+- **Lots of websites.** Add a Cloudflare Queue and checks run in batches, so thousands of websites can be checked every minute instead of about 40.
+- **Your own home page.** Add static files and people who aren't signed in see your home page at /, with sign-in at /signin.
+- **More white label.** Variables for the user agent websites see, the API guide link and the AI connector's name.
+
 ## 1.2.0: API, webhooks and AI connector
 
 - **API.** Make keys on the Account tab, then read what you watch, add, pause and remove monitors, read alerts and post status page notices from your own scripts and tools, at /api/v1. Keys can be read only, or read and change.

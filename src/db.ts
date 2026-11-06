@@ -4,7 +4,9 @@
 // Everything belongs to an account. The owner (who installed it) has the first account. When "Sell to clients"
 // is switched on, clients sign up for one of the owner's plans and get accounts of their own.
 
-export interface Env {
+import type { WhiteLabelEnv } from "./whitelabel.ts";
+
+export interface Env extends WhiteLabelEnv {
 	DB: D1Database;
 	/** Cloudflare's send_email binding. Alerts by email need a domain with Email Routing on (see the README). */
 	EMAIL?: SendEmail;
@@ -16,7 +18,15 @@ export interface Env {
 	/** Optional Cloudflare Turnstile on sign in, set-up, forgotten password and sign-up (turnstile.ts): both are needed. */
 	TURNSTILE_SITE_KEY?: string;
 	TURNSTILE_SECRET?: string;
+	/** Optional Cloudflare Queue for big installs: the cron hands due checks to it in batches, so thousands of
+	 *  websites can be checked every minute instead of about 40 (see the README, "Lots of websites"). */
+	CHECKS?: Queue<CheckBatch>;
+	/** Optional static files (Workers assets): a home page and other pages shown to people who aren't signed in. */
+	ASSETS?: Fetcher;
 }
+
+/** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */
+export interface CheckBatch { ids: string[]; daily?: boolean; late?: boolean; at: number }
 
 export interface MonitorRow {
 	id: string;
@@ -62,6 +72,8 @@ export interface AccountRow {
 	session_ver: number;
 	reset_token: string | null;
 	reset_until: string | null;
+	/** Free sign-ups confirm their email address with this before their checks run. */
+	verify_token: string | null;
 	created_at: string;
 }
 
@@ -77,6 +89,15 @@ export interface PlanRow {
 	pages: number;
 	position: number;
 	on_off: number;
+	/** 1.3.0: a free plan needs no Stripe price; sign-up asks the person to confirm their email address instead. */
+	free: number;
+	/** Alerts a day at most on this plan (null: the account's own setting). */
+	alerts_per_day: number | null;
+	/** Where this plan's alerts can go: "email", "push" (email and browser push) or "all" (every channel). */
+	channels: "email" | "push" | "all";
+	/** Optional yearly price, shown beside the monthly one. */
+	stripe_price_year: string | null;
+	price_label_year: string | null;
 }
 
 const SCHEMA = [
@@ -119,8 +140,21 @@ const SCHEMA = [
 	`CREATE TABLE IF NOT EXISTS oauth_tokens (
 		token_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, client_id TEXT NOT NULL, account_id TEXT NOT NULL, expires INTEGER NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS oauth_tokens_account ON oauth_tokens (account_id)`,
+	// 1.3.0: sign-ups per address (kept as a hash, for a day), for the free plan's limits.
+	`CREATE TABLE IF NOT EXISTS signups (ip_hash TEXT NOT NULL, at TEXT NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS signups_ip ON signups (ip_hash, at)`,
+	`CREATE INDEX IF NOT EXISTS monitors_due ON monitors (checked_at)`,
 ];
-const SCHEMA_VERSION = "2";
+/** Columns added after 1.0.0. Each is tried on its own, as it may already be there. */
+const COLUMNS = [
+	"ALTER TABLE plans ADD COLUMN free INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE plans ADD COLUMN alerts_per_day INTEGER",
+	"ALTER TABLE plans ADD COLUMN channels TEXT NOT NULL DEFAULT 'all'",
+	"ALTER TABLE plans ADD COLUMN stripe_price_year TEXT",
+	"ALTER TABLE plans ADD COLUMN price_label_year TEXT",
+	"ALTER TABLE accounts ADD COLUMN verify_token TEXT",
+];
+const SCHEMA_VERSION = "3";
 
 let ready: Promise<void> | null = null;
 
@@ -130,6 +164,7 @@ export function ensureSchema(db: D1Database): Promise<void> {
 		const have = await db.prepare("SELECT value FROM meta WHERE key = 'schema'").first<{ value: string }>().catch(() => null);
 		if (have?.value === SCHEMA_VERSION) return;
 		await db.batch(SCHEMA.map((s) => db.prepare(s)));
+		for (const c of COLUMNS) await db.prepare(c).run().catch(() => {});
 		await db.prepare("INSERT INTO meta (key, value) VALUES ('schema', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").bind(SCHEMA_VERSION).run();
 	})().catch((e) => {
 		ready = null;
@@ -185,4 +220,9 @@ export const newId = (bytes: number) => [...crypto.getRandomValues(new Uint8Arra
 export const accountById = (db: D1Database, id: string) => db.prepare("SELECT * FROM accounts WHERE id = ?").bind(id).first<AccountRow>();
 
 /** Clients whose subscription isn't paid have their checks held (kept, not run). The owner is never held. */
-export const isLive = (a: Pick<AccountRow, "role" | "status">) => a.role === "owner" || a.status === "active" || a.status === "trialing";
+export const isLive = (a: Pick<AccountRow, "role" | "status">) => a.role === "owner" || LIVE_STATUSES.includes(a.status);
+/** Paid (Stripe's active or trialing) or on a free plan with the email address confirmed. */
+export const LIVE_STATUSES = ["active", "trialing", "free"];
+export const LIVE_SQL = `account_id IN (SELECT id FROM accounts WHERE role = 'owner' OR status IN ('active', 'trialing', 'free'))`;
+
+export const planById = (db: D1Database, id: string | null) => (id ? db.prepare("SELECT * FROM plans WHERE id = ?").bind(id).first<PlanRow>() : Promise.resolve(null));

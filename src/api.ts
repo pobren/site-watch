@@ -1,16 +1,17 @@
 // The JSON the app page uses. Everything here needs someone signed in, apart from set-up, sign-in and sign-up.
 // Each account sees only its own things; the owner also gets the Admin routes (branding, plans, clients).
 
-import { deliver, newSecret, postTo, sendEmail } from "./alerts.ts";
+import { deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
 import { handleAuth, json } from "./api-auth.ts";
 import { currentAccount } from "./auth.ts";
-import { handleBilling, publicPlan } from "./billing.ts";
+import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
 	CHANNEL_NAMES, CHECK_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
 	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
-import { DEFAULT_BRAND, install, isLive, newId, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { DEFAULT_BRAND, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { cleanSub, vapidKeys } from "./push.ts";
 import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
 
@@ -33,14 +34,16 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 }
 
 
-interface Limits { monitors: number | null; minEvery: number; pages: number | null }
+interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null }
 
 /** What an account may have. The owner has no limits here (the licence covers that, on trust); clients have their plan's. */
 async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
-	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null };
-	const plan = a.plan ? await db.prepare("SELECT * FROM plans WHERE id = ?").bind(a.plan).first<PlanRow>() : null;
-	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0 };
+	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null };
+	const plan = await planById(db, a.plan);
+	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null };
 }
+
+const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, push: "Browser alerts" };
 
 async function everything(env: Env, me: AccountRow, origin: string) {
 	const db = env.DB;
@@ -54,9 +57,10 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		limitsOf(db, me),
 	]);
 	const out: Record<string, unknown> = {
-		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer },
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified" },
+		plans: me.role === "client" ? (await livePlans(db)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
-		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: CHANNEL_NAMES[c.kind as keyof typeof CHANNEL_NAMES] ?? c.kind, name: c.name, where: maskUrl(c.url), secret: c.secret, on: c.on_off === 1, fails: c.fails })),
+		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: c.kind === "push" ? new URL(c.url).hostname : maskUrl(c.url), secret: c.kind === "push" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
 		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: `${origin}/status/${p.slug}` })),
 		notices: notices.results,
 		alerts: alerts.results,
@@ -75,8 +79,8 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		]);
 		out.admin = {
 			alertFrom: inst.alertFrom, emailBinding: !!env.EMAIL, sell: inst.sell, stripeKey: !!env.STRIPE_SECRET_KEY, stripeWebhook: !!env.STRIPE_WEBHOOK_SECRET,
-			webhookUrl: `${origin}/stripe/webhook`, signupUrl: `${origin}/signup`, clients: clients.results,
-			plans: plans.results.map((p) => ({ ...publicPlan(p), stripePrice: p.stripe_price, on: p.on_off === 1, position: p.position })),
+			webhookUrl: `${origin}/stripe/webhook`, signupUrl: `${origin}/signup`, clients: clients.results, signupCap: await signupCap(db), queue: !!env.CHECKS,
+			plans: plans.results.map((p) => ({ ...publicPlan(p), stripePrice: p.stripe_price, stripePriceYear: p.stripe_price_year, priceYear: p.price_label_year, on: p.on_off === 1, position: p.position })),
 			licence: { websites: mons.results.filter((m) => m.kind === "website").length, limit: LICENCE_SITES },
 		};
 	}
@@ -186,12 +190,12 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 
 	// -- Monitors --
 	if (path === "/api/monitors" && method === "POST") {
-		if (!isLive(me)) return bad("Your plan isn't active, so checks are paused. Choose a plan on the Account tab first.", 402);
+		if (!isLive(me) && me.status !== "unverified") return bad("Your plan isn't active, so checks are paused. Choose a plan on the Account tab first.", 402);
 		const row = newMonitor(b, me.id, limits.minEvery);
 		if ("error" in row) return bad(row.error);
 		if (limits.monitors !== null) {
 			const n = await db.prepare("SELECT COUNT(*) AS n FROM monitors WHERE account_id = ?").bind(me.id).first<{ n: number }>();
-			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan watches up to ${limits.monitors} things. Remove one first, or change plan on the Account tab.`, 403);
+			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan watches up to ${limits.monitors === 1 ? "1 thing" : `${limits.monitors} things`}. Remove one first, or upgrade on the Account tab.`, 403);
 		}
 		const dup = await db.prepare("SELECT 1 FROM monitors WHERE account_id = ? AND kind = ? AND kind != 'heartbeat' AND COALESCE(url, '') = COALESCE(?, '') AND COALESCE(host, '') = COALESCE(?, '') AND COALESCE(port, 0) = COALESCE(?, 0)")
 			.bind(me.id, row.kind, row.url, row.host, row.port).first();
@@ -249,10 +253,27 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		return reply();
 	}
 
+	// -- Browser alerts (push): the page asks for this install's public key, then hands over the browser's subscription. --
+	if (path === "/api/push/key" && method === "POST") return json({ key: (await vapidKeys(db)).publicKey });
+	if (path === "/api/push" && method === "POST") {
+		if (!owner && !planAllows({ channels: limits.channels }, "push")) return bad("Browser alerts aren't on your plan. Upgrade on the Account tab to turn them on.", 403);
+		const sub = cleanSub(b.subscription);
+		if (!sub) return bad("This browser didn't give us what it needs for alerts. Please try again, or try another browser.");
+		const name = cleanName(b.name, 60) ?? "This browser";
+		const count = await db.prepare("SELECT COUNT(*) AS n FROM channels WHERE account_id = ?").bind(me.id).first<{ n: number }>();
+		if ((count?.n ?? 0) >= 20) return bad("That's 20 channels already. Remove one first.");
+		await db.batch([
+			db.prepare("DELETE FROM channels WHERE account_id = ? AND kind = 'push' AND url = ?").bind(me.id, sub.endpoint),
+			db.prepare("INSERT INTO channels (account_id, kind, name, url, secret, created_at) VALUES (?, 'push', ?, ?, ?, ?)").bind(me.id, name, sub.endpoint, JSON.stringify(sub.keys), iso(new Date())),
+		]);
+		return reply({ ok: true });
+	}
+
 	// -- Alert channels --
 	if (path === "/api/channels" && method === "POST") {
 		const c = cleanChannel(b);
 		if ("error" in c) return bad(c.error);
+		if (!owner && !planAllows({ channels: limits.channels }, c.kind)) return bad(`${CHANNEL_NAMES[c.kind]} alerts aren't on your plan. Upgrade on the Account tab to add them.`, 403);
 		const count = await db.prepare("SELECT COUNT(*) AS n FROM channels WHERE account_id = ?").bind(me.id).first<{ n: number }>();
 		if ((count?.n ?? 0) >= 20) return bad("That's 20 channels already. Remove one first.");
 		await db.prepare("INSERT INTO channels (account_id, kind, name, url, secret, created_at) VALUES (?, ?, ?, ?, ?, ?)").bind(me.id, c.kind, c.name, c.url, c.kind === "webhook" ? newSecret() : null, iso(new Date())).run();
@@ -267,7 +288,13 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			return reply();
 		}
 		if (ch[2]) {
-			const ok = await postTo(c, { event: "test", subject: `Test alert from ${inst.brand.name}`, text: `If you can read this, ${inst.brand.name} alerts will arrive here.`, urgent: false, url: ctx.link, sentAt: iso(new Date()), app: inst.brand.name });
+			const test = { event: "test" as const, subject: `Test alert from ${inst.brand.name}`, text: `If you can read this, ${inst.brand.name} alerts will arrive here.`, urgent: false, url: ctx.link, sentAt: iso(new Date()), app: inst.brand.name };
+			if (c.kind === "push") {
+				const r = await pushTo(db, c, test, inst.alertFrom ? `mailto:${inst.alertFrom}` : url.origin, "test");
+				if (r === "gone") await db.prepare("DELETE FROM channels WHERE id = ?").bind(c.id).run();
+				return r === "sent" ? reply({ ok: true }) : bad(r === "gone" ? "That browser has turned alerts off, so we've removed it. Turn them on again from that browser." : "The browser's push service didn't take the test. Please try again in a minute.", 502);
+			}
+			const ok = await postTo(c, test);
 			if (ok) await db.prepare("UPDATE channels SET fails = 0, on_off = 1 WHERE id = ?").bind(c.id).run();
 			return ok ? reply({ ok: true }) : bad(`${c.name} didn't accept the test. Check the address is right and still switched on in ${CHANNEL_NAMES[c.kind as keyof typeof CHANNEL_NAMES] ?? "the service"}.`, 502);
 		}
@@ -376,6 +403,11 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 				await setMeta(db, "alert_from", e);
 			}
 		}
+		if ("signupCap" in b) {
+			const n = Number(b.signupCap);
+			if (!Number.isInteger(n) || n < 1 || n > 100_000) return bad("Please choose between 1 and 100,000 new accounts a day.");
+			await setMeta(db, "signup_cap", String(n));
+		}
 		if ("sell" in b) {
 			if (b.sell && !env.STRIPE_SECRET_KEY) return bad("Add your STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET secrets to the Worker first (see the README).");
 			await setMeta(db, "sell", b.sell ? "1" : null);
@@ -409,12 +441,19 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const pages = num(b.pages, 0, 100);
 		const minEvery = CHECK_EVERY.includes(Number(b.minEvery)) ? Number(b.minEvery) : null;
 		if (monitors === null || pages === null || minEvery === null) return bad("Please fill in what the plan includes: things to watch, how often and status pages.");
-		const price = typeof b.stripePrice === "string" && b.stripePrice.trim() ? b.stripePrice.trim() : null;
-		if (price && !/^price_[A-Za-z0-9]+$/.test(price)) return bad("The Stripe price ID starts with price_. Find it on the product's page in Stripe.");
-		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1];
+		const priceId = (x: unknown) => (typeof x === "string" && x.trim() ? x.trim() : null);
+		const free = b.free === true;
+		const price = free ? null : priceId(b.stripePrice);
+		const priceYear = free ? null : priceId(b.stripePriceYear);
+		for (const p of [price, priceYear]) if (p && !/^price_[A-Za-z0-9]+$/.test(p)) return bad("A Stripe price ID starts with price_. Find it on the product's page in Stripe.");
+		const perDay = b.alertsPerDay === "" || b.alertsPerDay === null || b.alertsPerDay === undefined ? null : num(b.alertsPerDay, 1, 1000);
+		if (perDay === null && b.alertsPerDay !== "" && b.alertsPerDay !== null && b.alertsPerDay !== undefined) return bad("Please choose between 1 and 1,000 alerts a day, or leave it empty for no limit.");
+		const channels = ["email", "push", "all"].includes(String(b.channels)) ? String(b.channels) : "all";
+		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);
@@ -437,7 +476,7 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 			return reply();
 		}
 		// Free of charge (no Stripe), or held. Stripe's next webhook for them wins again.
-		if ("status" in b) await db.prepare("UPDATE accounts SET status = ? WHERE id = ?").bind(b.status === "active" ? "active" : "none", cl[1]).run();
+		if ("status" in b) await db.prepare("UPDATE accounts SET status = ? WHERE id = ?").bind(b.status === "active" ? "active" : b.status === "free" ? "free" : "none", cl[1]).run();
 		if ("plan" in b && typeof b.plan === "string") await db.prepare("UPDATE accounts SET plan = (SELECT id FROM plans WHERE id = ?) WHERE id = ?").bind(b.plan, cl[1]).run();
 		return reply();
 	}

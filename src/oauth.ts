@@ -4,6 +4,7 @@
 // the authorisation-code flow with PKCE (S256), refresh tokens, and a 401 that points at the metadata.
 // Codes and tokens are only stored as SHA-256 hashes. Tokens can only read.
 
+import { WL } from "./whitelabel.ts";
 import { newId } from "./db.ts";
 import { sha256 } from "./keys.ts";
 
@@ -42,7 +43,7 @@ export function serverMetadata(origin: string): Response {
 		code_challenge_methods_supported: ["S256"],
 		token_endpoint_auth_methods_supported: ["none"],
 		scopes_supported: [SCOPE],
-		service_documentation: "https://paulobrien.dev/watch/api/#ai",
+		service_documentation: `${WL.docs}#ai`,
 	});
 }
 

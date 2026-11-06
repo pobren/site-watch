@@ -2,6 +2,7 @@
 // was my uptime last month?". It only reads. Sign in through OAuth (oauth.ts), or send an API key (keys.ts) from apps
 // that let you add a header. The same answers as the public API (v1.ts).
 
+import { WL } from "./whitelabel.ts";
 import { getMonitor, listAlerts, listMonitors, listPages } from "./v1.ts";
 
 const VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
@@ -74,8 +75,8 @@ async function answer(msg: Rpc, db: D1Database, accountId: string, origin: strin
 			return ok({
 				protocolVersion: VERSIONS.includes(asked) ? asked : VERSIONS[0],
 				capabilities: { tools: {} },
-				serverInfo: { name: "site-watch", title: "Site Watch", version, websiteUrl: "https://paulobrien.dev/watch/" },
-				instructions: INSTRUCTIONS,
+				serverInfo: { name: "site-watch", title: WL.name, version, websiteUrl: WL.home },
+				instructions: INSTRUCTIONS.replaceAll("Site Watch", WL.name),
 			});
 		}
 		case "ping":
