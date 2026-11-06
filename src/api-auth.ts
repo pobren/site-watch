@@ -83,7 +83,8 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 			const token = newId(24);
 			await db.prepare("UPDATE accounts SET reset_token = ?, reset_until = ? WHERE id = ?").bind(token, iso(new Date(Date.now() + 3_600_000)), a.id).run();
 			await sendEmail(env, inst.alertFrom, a.email, `Choose a new password for ${inst.brand.name}`,
-				`Someone asked to choose a new password for ${a.email}. If it was you, open this link in the next hour:\n\n${url.origin}/reset?token=${token}\n\nIf it wasn't you, there's nothing to do: your password hasn't changed.`, inst.brand.name);
+				`Someone asked to choose a new password for ${a.email}. If it was you, use this link in the next hour.\n\n${url.origin}/reset?token=${token}\n\nIf it wasn't you, there's nothing to do: your password hasn't changed.`, inst.brand.name,
+				{ brand: inst.brand, button: "Choose a new password", footer: `If the button doesn't work, copy this link into your browser: ${url.origin}/reset?token=${token}` });
 		}
 		return json({ ok: true, owner: !inst.alertFrom });
 	}

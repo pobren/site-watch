@@ -811,14 +811,21 @@ export const cleanEmail = (input: unknown): string | null => {
 	return e.length <= 254 && /^[^\s@<>()",;:]+@([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(e) ? e : null;
 };
 
-/** A plain text email as raw MIME, for Cloudflare's send_email binding. */
-export function rawEmail(from: string, to: string, subject: string, text: string, now: Date, id: string, fromName = "Site Watch"): string {
+/** An email as raw MIME, for Cloudflare's send_email binding: plain text, or text and HTML side by side. */
+export function rawEmail(from: string, to: string, subject: string, text: string, now: Date, id: string, fromName = "Site Watch", html?: string): string {
 	const enc = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(s)}?=`);
-	const body = b64(text).replace(/.{76}/g, "$&\r\n");
-	return [
+	const wrap = (s: string) => b64(s).replace(/.{76}/g, "$&\r\n");
+	const head = [
 		`From: ${enc(fromName.replace(/["<>\r\n]/g, ""))} <${from}>`, `To: ${to}`, `Subject: ${enc(subject)}`, `Date: ${now.toUTCString()}`,
-		`Message-ID: <${id}@${from.split("@")[1]}>`, "MIME-Version: 1.0", "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64",
-		"Auto-Submitted: auto-generated", "", body, "",
+		`Message-ID: <${id}@${from.split("@")[1]}>`, "MIME-Version: 1.0", "Auto-Submitted: auto-generated",
+	];
+	if (!html) return [...head, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(text), ""].join("\r\n");
+	const edge = `sw-${id}`;
+	return [
+		...head, `Content-Type: multipart/alternative; boundary="${edge}"`, "",
+		`--${edge}`, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(text),
+		`--${edge}`, "Content-Type: text/html; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(html),
+		`--${edge}--`, "",
 	].join("\r\n");
 }
 
