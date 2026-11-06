@@ -4,18 +4,35 @@
 
 import { EmailMessage } from "cloudflare:email";
 import { CHANNEL_KINDS, hookMonitor, webhookHeaders, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
-import { install, newId, type AccountRow, type Env, type MonitorRow } from "./db.ts";
+import { install, newId, planById, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { sendPush, type PushSub } from "./push.ts";
+import { WL } from "./whitelabel.ts";
 
 interface ChannelRow { id: number; kind: string; name: string; url: string; secret: string | null; on_off: number; fails: number }
 
 export const newSecret = () => `whsec_${newId(24)}`;
+
+/** A browser push channel keeps the browser's keys in `secret`. */
+const pushSubOf = (c: Pick<ChannelRow, "url" | "secret">): PushSub => ({ endpoint: c.url, keys: JSON.parse(c.secret ?? "{}") });
+
+/** Sends an alert to one browser. "gone" when the browser has turned push off. */
+export async function pushTo(db: D1Database, c: Pick<ChannelRow, "url" | "secret">, e: HookEvent, contact: string, tag?: string): Promise<"sent" | "gone" | "failed"> {
+	return sendPush(db, pushSubOf(c), { title: e.subject, body: e.text.split("\n").find((l) => l.trim()) ?? "", url: e.url, urgent: e.urgent, tag }, contact);
+}
+
+/** Which channels a plan allows: email always; browser push unless "email"; the rest only on "all". */
+export const planAllows = (plan: Pick<PlanRow, "channels"> | null, kind: string) => {
+	const c = plan?.channels ?? "all";
+	if (kind === "email" || c === "all") return true;
+	return kind === "push" && c === "push";
+};
 
 /** Posts to one channel. True when the service took it. Your own webhook's posts are signed with its secret. */
 export async function postTo(c: Pick<ChannelRow, "kind" | "url" | "secret">, e: HookEvent): Promise<boolean> {
 	const kind = (CHANNEL_KINDS.includes(c.kind as ChannelKind) ? c.kind : "webhook") as ChannelKind;
 	const full: HookEvent = { ...e, id: e.id ?? `evt_${newId(12)}`, type: e.type ?? (e.event === "test" ? "test" : "alert.test"), created: e.sentAt, monitor: e.monitor ?? null };
 	const body = JSON.stringify(payloadFor(kind, full));
-	const headers: Record<string, string> = { "content-type": "application/json", "user-agent": "SiteWatch/1.0" };
+	const headers: Record<string, string> = { "content-type": "application/json", "user-agent": `${WL.name.replace(/\s+/g, "")}/1.0` };
 	if (kind === "webhook" && c.secret) Object.assign(headers, await webhookHeaders(c.secret, full.type!, full.id!, body));
 	try {
 		const res = await fetch(c.url, { method: "POST", headers, body, signal: AbortSignal.timeout(10_000) });
@@ -43,8 +60,10 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 	const inst = await install(db);
 	const since = iso(new Date(now.getTime() - 86_400_000));
 	const today = await db.prepare("SELECT COUNT(*) AS n FROM alerts WHERE account_id = ? AND at > ? AND sent != 'held'").bind(account.id, since).first<{ n: number }>();
+	const plan = account.role === "client" ? await planById(db, account.plan) : null;
+	const cap = Math.min(account.alerts_per_day, plan?.alerts_per_day ?? Infinity);
 	const sent: string[] = [];
-	if ((today?.n ?? 0) >= account.alerts_per_day) {
+	if ((today?.n ?? 0) >= cap) {
 		sent.push("held");
 	} else {
 		const link = inst.origin ? `${inst.origin}/` : null;
@@ -58,7 +77,15 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 			event: "alert", subject: alert.subject, text: alert.text, urgent: alert.urgent, url: link, sentAt: iso(now), app: inst.brand.name,
 			id: `evt_${newId(12)}`, type: alert.type ?? "alert.test", monitor: row ? hookMonitor(row) : null,
 		};
+		const contact = inst.alertFrom ? `mailto:${inst.alertFrom}` : (inst.origin ?? "mailto:alerts@example.com");
 		for (const c of results) {
+			if (account.role === "client" && !planAllows(plan, c.kind)) continue;
+			if (c.kind === "push") {
+				const r = await pushTo(db, c, e, contact, monitorId ?? undefined);
+				sent.push(r === "sent" ? c.name : `${c.name} failed`);
+				if (r === "gone") await db.prepare("DELETE FROM channels WHERE id = ?").bind(c.id).run();
+				continue;
+			}
 			const ok = await postTo(c, e);
 			sent.push(ok ? c.name : `${c.name} failed`);
 			const fails = ok ? 0 : c.fails + 1;

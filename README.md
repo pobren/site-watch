@@ -136,6 +136,41 @@ It switches on once both are there. Remove either one to switch it off.
 
 <img src="docs/admin.png" alt="The Admin tab: sending email, branding, selling to clients, plans and clients" width="100%">
 
+### A free plan
+
+Tick **Free plan** on a plan and it needs no Stripe price. People who choose it confirm their email address, then their checks start, so email must be set up (see [Email alerts](#email-alerts)). To email any address, not only verified ones, onboard your domain in **Email Service › Email Sending** in Cloudflare (Workers Paid plan). When someone's paid subscription ends they drop back to the free plan, and anything over its limits is paused rather than deleted.
+
+Each plan can also cap alerts a day and choose where alerts can go: email only, email and browser alerts, or every channel. A link to `/signup?plan=pro&yearly=1` opens sign-up with that plan chosen.
+
+## Browser alerts
+
+On the **Alerts** tab, **Turn on alerts on this device** makes alerts pop up on that computer or phone, even with the page closed. Each browser is turned on separately and shows in the channel list, where you can test or remove it. On iPhone and iPad, add the site to the Home Screen first (Share, then Add to Home Screen) and turn alerts on from there.
+
+There's nothing to set up: the first time someone turns alerts on, Site Watch makes its own signing keys and keeps them in the database. Alerts are encrypted for each browser, so the push services (Google, Apple, Mozilla, Microsoft) can't read them.
+
+## Lots of websites
+
+On its own, Site Watch checks about 40 things a minute, which is plenty for one business. For thousands, add a Cloudflare Queue (Workers Paid plan) and the cron hands checks out in batches:
+
+```jsonc
+"queues": {
+	"producers": [{ "binding": "CHECKS", "queue": "site-watch-checks" }],
+	"consumers": [{ "queue": "site-watch-checks", "max_batch_size": 5, "max_batch_timeout": 1 }]
+}
+```
+
+Make the queue first with `npx wrangler queues create site-watch-checks`. The Admin tab says when checks are running through it.
+
+## Your own home page and brand
+
+Add a folder of static files to the Worker and people who aren't signed in see its `index.html` at `/`, with sign-in at `/signin` and sign-up at `/signup`. Other files (pricing, terms, privacy, icons) are served as they are. The Worker needs to run first, so it can tell who's signed in:
+
+```jsonc
+"assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true }
+```
+
+To keep Site Watch's name out of places people outside the app can see, set these as plain variables on the Worker: `CHECK_AGENT` (the user agent websites see in their logs), `DOCS_URL` (the API guide link), `HOME_URL` and `APP_NAME` (what the AI connector calls itself).
+
 ## How it works
 
 One Cloudflare Worker and one D1 database. Every minute the Worker checks whatever is due, a few at a time, from Cloudflare's network. All checks for an install come from that one place. Ten websites checked every five minutes fit easily in Cloudflare's free plan.

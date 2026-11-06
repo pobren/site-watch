@@ -6,13 +6,14 @@ import type { Brand } from "./db.ts";
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-export function appPage(brand: Brand, version: string): string {
-	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+export function appPage(brand: Brand, version: string, docs = "https://paulobrien.dev/watch/api/"): string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-status-bar-style" content="default"><meta name="apple-mobile-web-app-title" content="${esc(brand.name)}"><link rel="apple-touch-icon" href="/icon-192.png">
 <title>${esc(brand.name)}</title><meta name="robots" content="noindex">
 <link rel="icon" href="${brand.logo ? esc(brand.logo) : `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="${brand.colour}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>`)}`}">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="${esc(brand.colour)}">
 <style>${CSS.replace("--brand:#0f766e", `--brand:${brand.colour}`)}</style></head>
 <body><div id="app"><p class="loading">Loading…</p></div>
-<script>window.SW=${JSON.stringify({ version }).replace(/</g, "\\u003c")};</script>
+<script>window.SW=${JSON.stringify({ version, docs }).replace(/</g, "\\u003c")};</script>
 <script>${JS}</script></body></html>`;
 }
 
@@ -76,6 +77,25 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px
 .plans{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
 .foot{color:var(--faint);font-size:13px;text-align:center;margin-top:32px}
 .spark{width:100%;height:40px;margin-top:8px}
+/* Feels like an app on phones: tabs along the bottom, a big status card, pull down to refresh. */
+.status{border-radius:22px;padding:22px;margin-bottom:16px;color:#fff;display:flex;gap:16px;align-items:center;background:var(--up)}
+.status.s-down{background:var(--down)}.status.s-warn{background:var(--warn)}
+.status .big{width:56px;height:56px;border-radius:50%;background:rgba(255,255,255,.2);display:grid;place-items:center;flex:none}
+.status h1{margin:0;color:#fff}.status p{margin:2px 0 0;opacity:.9}
+.tabbar{display:none}
+.ptr{position:fixed;left:50%;top:0;transform:translate(-50%,-60px);z-index:20;background:#fff;border:1px solid var(--line);border-radius:999px;padding:8px 14px;font-weight:700;font-size:14px;color:var(--soft);box-shadow:0 6px 20px rgba(15,23,42,.12);display:flex;gap:6px;align-items:center;transition:transform .15s}
+@media(max-width:720px){
+ .top nav{display:none}
+ .top .in{padding-top:max(12px,env(safe-area-inset-top))}
+ main{padding-bottom:calc(96px + env(safe-area-inset-bottom))}
+ .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:10;background:rgba(255,255,255,.96);backdrop-filter:blur(12px);border-top:1px solid var(--line);padding:6px 4px calc(6px + env(safe-area-inset-bottom))}
+ .tabbar button{flex:1;background:none;border:0;font:inherit;font-size:11px;font-weight:700;color:var(--faint);display:flex;flex-direction:column;align-items:center;gap:2px;padding:6px 0;cursor:pointer;min-width:0}
+ .tabbar button,.tabbar button.on{background:none;padding:6px 0;border-radius:0}
+ .tabbar button.on{color:var(--brand)}
+ .tabbar button.add svg{background:var(--brand);color:#fff;border-radius:12px;padding:6px;width:36px;height:36px;margin:-10px 0 0}
+ .stats{grid-template-columns:repeat(2,1fr)}
+ .card{border-radius:18px}
+}
 @media(max-width:640px){.two{grid-template-columns:1fr}.mon{grid-template-columns:auto 1fr}.mon .acts{grid-column:1/-1}.bars i:nth-child(-n+60){display:none}h1{font-size:26px}}
 `;
 
@@ -101,6 +121,7 @@ const ICONS = {
 	copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
 	send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
 	check: '<path d="M20 6 9 17l-5-5"/>',
+	alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
 	save: '<path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/>',
 	out: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
 	in: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
@@ -109,6 +130,8 @@ const ICONS = {
 	card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
 	key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
 	x: '<path d="M18 6 6 18M6 6l12 12"/>',
+	up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+	phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
 	chev: '<path d="m6 9 6 6 6-6"/>',
 	users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
 };
@@ -261,25 +284,67 @@ function resetView() {
 	centre(card);
 }
 
+const CHANNEL_WORDS = { email: "email alerts", push: "email and browser alerts", all: "alerts by email, browser, Slack, Teams, Google Chat, Discord and webhook" };
+const planLine = (p) => p.monitors + (p.monitors === 1 ? " website" : " things to watch") + ", checked every " + everyWords(p.minEvery) + ", " + CHANNEL_WORDS[p.channels || "all"] + (p.alertsPerDay ? " (up to " + p.alertsPerDay + " a day)" : "") + (p.pages ? ", " + p.pages + " status page" + (p.pages === 1 ? "" : "s") : "");
+
 async function signupView() {
 	const { plans } = await api("/api/plans");
 	if (!plans.length) return centre(h("div", { class: "card" }, h("h1", null, "Sign-up isn't open"), h("p", null, "Please ask whoever sent you here."), h("div", { class: "btns" }, btn("Sign in", "in", () => signinView()))));
-	let chosen = plans[0].id;
+	// A link from a home page can choose the plan: /signup?plan=pro&yearly=1 (by the plan's name or id).
+	const q = new URLSearchParams(location.search);
+	const want = (q.get("plan") || "").toLowerCase();
+	let chosen = (plans.find((p) => p.id === want || p.name.toLowerCase() === want) || plans[0]).id;
+	let yearly = q.get("yearly") === "1";
+	const anyYear = plans.some((p) => p.priceYear);
 	const tiles = h("div", { class: "plans" });
-	const drawTiles = () => tiles.replaceChildren(...plans.map((p) => h("button", { type: "button", class: "tile" + (p.id === chosen ? " on" : ""), onclick: () => { chosen = p.id; drawTiles(); } },
-		h("b", null, icon(p.id === chosen ? "check" : "pulse"), p.name), p.price ? h("div", { style: "font-size:20px;font-weight:800;margin:6px 0" }, p.price) : null,
-		h("span", null, p.monitors + " things to watch, checked every " + everyWords(p.minEvery) + (p.pages ? ", " + p.pages + " status page" + (p.pages === 1 ? "" : "s") : "")), p.blurb ? h("div", { class: "hint" }, p.blurb) : null)));
+	const period = h("div", { class: "btns", style: "margin:0 0 12px" });
+	const submit = h("button", { class: "btn main", type: "submit" });
+	const drawTiles = () => {
+		const cur = plans.find((p) => p.id === chosen);
+		tiles.replaceChildren(...plans.map((p) => h("button", { type: "button", class: "tile" + (p.id === chosen ? " on" : ""), onclick: () => { chosen = p.id; drawTiles(); } },
+			h("b", null, icon(p.id === chosen ? "check" : "pulse"), p.name), h("div", { style: "font-size:20px;font-weight:800;margin:6px 0" }, p.free ? "Free" : (yearly && p.priceYear ? p.priceYear : p.price) || ""),
+			h("span", null, planLine(p)), p.blurb ? h("div", { class: "hint" }, p.blurb) : null)));
+		period.replaceChildren(...(anyYear ? [btn("Monthly", yearly ? "card" : "check", () => { yearly = false; drawTiles(); }, yearly ? "small" : "small main"), btn("Yearly", yearly ? "check" : "card", () => { yearly = true; drawTiles(); }, yearly ? "small main" : "small")] : []));
+		submit.replaceChildren(icon(cur.free ? "check" : "card"), cur.free ? "Start free" : "Continue to payment");
+	};
 	drawTiles();
 	const name = h("input", { autocomplete: "organization" });
 	const email = h("input", { type: "email", autocomplete: "email", required: true });
 	const pw = h("input", { type: "password", autocomplete: "new-password", minlength: 10, required: true });
-	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { const r = await api("/api/signup", { plan: chosen, name: name.value, email: email.value, password: pw.value, tz: tz(), ts: await robot() }); location.href = r.checkout; }); } },
-		h("h1", null, "Sign up"), h("p", { class: "lead" }, "Choose a plan, make your account, then pay securely with Stripe."), tiles,
+	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(submit, async () => { const r = await api("/api/signup", { plan: chosen, yearly, name: name.value, email: email.value, password: pw.value, tz: tz(), ts: await robot() }); location.href = r.checkout || r.next || "/"; }); } },
+		h("h1", null, "Sign up"), h("p", { class: "lead" }, plans.some((p) => p.free) ? "Choose a plan and make your account. The free plan needs no card." : "Choose a plan, make your account, then pay securely with Stripe."), period, tiles,
 		field("Your name or business", name), field("Email address", email, "You'll sign in with it, and alerts go here."), field("Choose a password", pw, "At least 10 characters."),
-		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("card"), "Continue to payment")),
+		h("div", { class: "btns" }, submit),
 		h("p", null, "Already have an account? ", h("a", { href: "/signin" }, "Sign in")));
 	const robot = robotCheck(card);
 	centre(card);
+}
+
+async function verifyView() {
+	const token = new URLSearchParams(location.search).get("token") || "";
+	try {
+		await api("/api/verify", { token });
+		location.href = "/?confirmed=1";
+	} catch (e) {
+		centre(h("div", { class: "card" }, h("h1", null, "We couldn't confirm that"), msg("err", e.message), h("div", { class: "btns" }, h("a", { class: "btn main", href: "/signin" }, icon("in"), "Sign in"))));
+	}
+}
+
+// Browser alerts: the browser asks permission, makes a push subscription with this install's key, and we keep it
+// as a channel. On iPhone and iPad this works once the site is added to the Home Screen (Share, Add to Home Screen).
+const pushReady = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const isApple = () => /iPhone|iPad|iPod/.test(navigator.userAgent) && !window.navigator.standalone;
+async function turnOnPush() {
+	if (!pushReady()) throw new Error(isApple() ? "On iPhone and iPad, add this site to your Home Screen first (tap Share, then Add to Home Screen), open it from there and try again." : "This browser can't show alerts. Try Chrome, Edge, Firefox or Safari.");
+	const ok = await Notification.requestPermission();
+	if (ok !== "granted") throw new Error("Alerts were blocked. Allow notifications for this site in your browser's settings, then try again.");
+	const reg = await navigator.serviceWorker.register("/sw.js");
+	await navigator.serviceWorker.ready;
+	const { key } = await api("/api/push/key", {});
+	const raw = Uint8Array.from(atob(key.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((key.length + 3) % 4)), (c) => c.charCodeAt(0));
+	const sub = (await reg.pushManager.getSubscription()) || (await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: raw }));
+	const device = /iPhone/.test(navigator.userAgent) ? "iPhone" : /iPad/.test(navigator.userAgent) ? "iPad" : /Android/.test(navigator.userAgent) ? "Android phone" : /Mac/.test(navigator.userAgent) ? "Mac" : /Windows/.test(navigator.userAgent) ? "Windows computer" : "This browser";
+	return api("/api/push", { subscription: sub.toJSON(), name: device });
 }
 
 // -- Signed in ---------------------------------------------------------------------------
@@ -289,8 +354,32 @@ function shell(content) {
 	if (state.me.role === "owner") tabs.push(["admin", "Admin", "cog"]);
 	app.replaceChildren(
 		h("div", { class: "top" }, h("div", { class: "in" }, logo(), h("nav", null, tabs.map(([id, label, ic]) => h("button", { class: tab === id ? "on" : "", onclick: () => go(id) }, icon(ic), label))))),
-		h("main", null, flashText ? msg("ok", flashText) : null, content, h("p", { class: "foot" }, brand().name + " " + window.SW.version)));
+		h("main", null, flashText ? msg("ok", flashText) : null, content, h("p", { class: "foot" }, brand().name + " " + window.SW.version)),
+		h("nav", { class: "tabbar", "aria-label": "Sections" }, tabs.map(([id, label, ic]) => h("button", { class: (tab === id ? "on " : "") + (id === "add" ? "add" : ""), "aria-current": tab === id ? "page" : null, onclick: () => go(id) }, icon(ic, id === "add" ? 36 : 24), SHORT[id] || label))));
 }
+const SHORT = { overview: "Watching", pages: "Pages" };
+
+// Pull down from the top of the page to check for news, like a phone app.
+let pullY = null, pullBox = null;
+window.addEventListener("touchstart", (e) => { pullY = state && window.scrollY <= 0 && e.touches.length === 1 ? e.touches[0].clientY : null; }, { passive: true });
+window.addEventListener("touchmove", (e) => {
+	if (pullY === null) return;
+	const d = e.touches[0].clientY - pullY;
+	if (!pullBox) { pullBox = h("div", { class: "ptr", role: "status" }, icon("refresh", 16), "Pull to refresh"); document.body.append(pullBox); }
+	pullBox.style.transform = "translate(-50%," + (Math.min(d, 90) - 60) + "px)";
+	pullBox.lastChild.textContent = d > 70 ? "Let go to refresh" : "Pull to refresh";
+}, { passive: true });
+window.addEventListener("touchend", async (e) => {
+	if (pullY === null || !pullBox) { pullY = null; return; }
+	const d = e.changedTouches[0].clientY - pullY, box = pullBox;
+	pullY = null; pullBox = null;
+	if (d > 70) {
+		box.lastChild.textContent = "Refreshing…"; box.style.transform = "translate(-50%,16px)";
+		try { state = await api("/api/state"); draw(); } catch {}
+	}
+	box.style.transform = "translate(-50%,-60px)"; setTimeout(() => box.remove(), 200);
+});
+
 function go(t) { tab = t; editing = null; newKey = null; location.hash = t; draw(); window.scrollTo(0, 0); }
 
 function draw() {
@@ -316,13 +405,19 @@ function spark(points) {
 
 function overview() {
 	const m = state.monitors;
+	if (state.me.unverified) return h("div", null, h("h1", null, "Please confirm your email address"), h("p", { class: "lead" }, "We've sent a link to " + state.me.email + ". Once you click it, we start checking. You can add your website now."),
+		h("div", { class: "btns" }, btn("Add your website", "plus", () => go("add"), "main"), btn("Send the email again", "send", (e) => act(e.currentTarget, () => api("/api/verify/again", {}), "Sent. Check your inbox and spam folder."))));
 	if (!state.me.live) return h("div", null, h("h1", null, "Your plan isn't active"), h("p", { class: "lead" }, "Your checks are paused until it is. Choose a plan or update your payment on the Account tab."), btn("Open Account", "user", () => go("account"), "main"));
 	if (!m.length) return h("div", null, h("h1", null, "Welcome to " + brand().name), h("p", { class: "lead" }, "Add your first website, mail server, port or scheduled job and we'll start watching it straight away."), btn("Add something to watch", "plus", () => go("add"), "main"));
 	const count = (f) => m.filter(f).length;
 	const down = count((x) => x.status === "down"), probs = count((x) => ["cert", "blocked", "unsure"].includes(x.status));
 	const lic = state.admin && state.admin.licence;
+	const last = m.map((x) => x.checkedAt).filter(Boolean).sort().pop();
 	return h("div", null,
-		h("h1", null, down ? down + " down right now" : probs ? "Something needs a look" : "Everything's working"),
+		h("div", { class: "status" + (down ? " s-down" : probs ? " s-warn" : ""), role: "status" },
+			h("span", { class: "big" }, icon(down ? "alert" : probs ? "alert" : "check", 30)),
+			h("div", null, h("h1", null, down ? down + " down right now" : probs ? "Something needs a look" : "Everything's working"),
+				h("p", null, down ? "We keep checking and will tell you the moment it's back." : (last ? "Last checked " + ago(last) + "." : "Your first checks are on their way.")))),
 		h("p", { class: "lead" }, "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row."),
 		h("div", { class: "stats" }, h("div", { class: "stat" }, h("b", { class: "t-up" }, count((x) => x.status === "up")), h("span", null, "Working")), h("div", { class: "stat" }, h("b", { class: "t-down" }, down), h("span", null, "Down")), h("div", { class: "stat" }, h("b", { class: "t-unsure" }, probs), h("span", null, "Need a look")), h("div", { class: "stat" }, h("b", null, m.length), h("span", null, "Watching"))),
 		lic && lic.websites > lic.limit ? h("div", { class: "note" }, "You're watching " + lic.websites + " websites. The free licence covers one person or organisation's own websites, up to " + lic.limit + ". For more, ", h("a", { href: "https://paulobrien.dev/contact/", target: "_blank", rel: "noopener" }, "ask about a commercial licence"), ".") : null,
@@ -437,22 +532,32 @@ function alerts() {
 	const ck = h("select", null, kinds.map(([v, l]) => h("option", { value: v }, l)));
 	const cn = h("input", { placeholder: "Optional" });
 	const cu = h("input", { placeholder: "https://", inputmode: "url" });
+	const lim = state.limits || {};
+	const canPush = lim.channels !== "email", canChat = lim.channels !== "email" && lim.channels !== "push";
+	const upgrade = state.me.role === "client" && state.plans && state.plans.some((p) => !p.free);
+	const pushCard = h("div", { class: "card" }, h("h2", null, "On your phone and computer"),
+		h("p", null, "Alerts pop up on this device straight away, even when this page is closed. Turn them on in each browser you use."),
+		canPush ? [h("div", { class: "btns" }, btn("Turn on alerts on this device", "bell", (e) => act(e.currentTarget, turnOnPush, "Alerts are on for this device. Send it a test below."), "main")),
+			isApple() ? h("p", { class: "hint" }, "On iPhone and iPad: tap Share, then Add to Home Screen, and turn alerts on from the icon it adds.") : null]
+			: msg("note", "Alerts on your phone and computer are on the paid plans." + (upgrade ? " Upgrade on the Account tab." : "")));
 	return h("div", null, h("h1", null, "Alerts"), h("p", { class: "lead" }, "Where we tell you when something goes down, comes back, or has a certificate or renewal coming up."),
+		pushCard,
 		h("div", { class: "card" }, h("h2", null, "By email"),
 			!s.emailReady ? msg("note", state.me.role === "owner" ? "Email isn't set up yet: choose the address alerts come from on the Admin tab. You can use the channels below meanwhile." : "Email alerts aren't available here yet. You can use the channels below.") : null,
-			field("Send alerts to", to), h("div", { class: "two" }, field("Your time zone", zone, "For the times in alerts."), field("Most alerts a day", per, "A safety net if something keeps going up and down.")),
+			field("Send alerts to", to), h("div", { class: "two" }, field("Your time zone", zone, "For the times in alerts."), field("Most alerts a day", per, lim.alertsPerDay ? "Your plan sends up to " + lim.alertsPerDay + " a day." : "A safety net if something keeps going up and down.")),
 			h("datalist", { id: "zones" }, (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []).map((z) => h("option", { value: z }))),
 			h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/settings", { alertTo: to.value, tz: zone.value, alertsPerDay: Number(per.value) }), "Saved"), "main"),
 				btn("Send a test alert", "send", (e) => act(e.currentTarget, async () => { const r = await api("/api/alerts/test", {}); return r; }, "Test sent. Check your email and channels.")))),
-		h("div", { class: "card" }, h("h2", null, "Chat and webhooks"),
+		h("div", { class: "card" }, h("h2", null, canChat ? "Devices, chat and webhooks" : "Your devices"),
 			state.channels.length ? h("table", null, h("tr", null, h("th", null, "Channel"), h("th", null, "Where"), h("th", null, "")),
 				state.channels.map((c) => h("tr", null, h("td", null, h("b", null, c.name), h("div", { class: "hint" }, c.kindName + (c.on ? "" : " · switched off" + (c.fails ? " after " + c.fails + " failed posts" : "")))),
 					h("td", null, c.where, c.secret ? h("div", { class: "hint" }, "Signing secret: ", h("code", null, c.secret)) : null),
 					h("td", null, h("div", { class: "btns", style: "margin:0" }, btn("Test", "send", (e) => act(e.currentTarget, () => api("/api/channels/" + c.id + "/test", {}), "Sent to " + c.name), "small"),
 						btn(c.on ? "Switch off" : "Switch on", c.on ? "pause" : "play", (e) => act(e.currentTarget, () => api("/api/channels/" + c.id, { on: !c.on })), "small"),
 						btn("Remove", "trash", (e) => act(e.currentTarget, () => api("/api/channels/" + c.id, undefined, "DELETE")), "small danger")))))) : h("p", { class: "hint" }, "No channels yet."),
-			h("h3", { style: "margin-top:16px" }, "Add a channel"), h("div", { class: "two" }, field("Service", ck), field("Name", cn)), field("Webhook address", cu, "Paste the incoming webhook address the service gives you."),
-			h("div", { class: "btns" }, btn("Add channel", "plus", (e) => act(e.currentTarget, () => api("/api/channels", { kind: ck.value, name: cn.value, url: cu.value }), "Channel added. Send it a test.")))),
+			canChat ? [h("h3", { style: "margin-top:16px" }, "Add a channel"), h("div", { class: "two" }, field("Service", ck), field("Name", cn)), field("Webhook address", cu, "Paste the incoming webhook address the service gives you."),
+			h("div", { class: "btns" }, btn("Add channel", "plus", (e) => act(e.currentTarget, () => api("/api/channels", { kind: ck.value, name: cn.value, url: cu.value }), "Channel added. Send it a test.")))]
+			: h("p", { class: "hint" }, "Slack, Teams, Google Chat, Discord and webhooks are on the paid plans." + (upgrade ? " Upgrade on the Account tab." : ""))),
 		h("div", { class: "card" }, h("h2", null, "Recent alerts"), state.alerts.length ? state.alerts.map((a) => h("details", { class: "alert-item" }, h("summary", { style: "cursor:pointer" }, h("b", { class: a.urgent ? "t-down" : "" }, a.subject), h("span", { class: "hint" }, " · " + when(a.at) + " · " + (a.sent === "held" ? "held (daily limit)" : a.sent || "nowhere to send it"))), h("pre", null, a.text))) : h("p", { class: "hint" }, "None yet.")));
 }
 
@@ -494,11 +599,7 @@ function account() {
 	const cur = h("input", { type: "password", autocomplete: "current-password" });
 	const next = h("input", { type: "password", autocomplete: "new-password" });
 	return h("div", null, h("h1", null, "Account"), h("p", { class: "lead" }, "Signed in as " + me.email + "."),
-		me.role === "client" ? h("div", { class: "card" }, h("h2", null, "Your plan"),
-			h("p", null, h("b", null, me.live ? "Active" : "Not active"), me.periodEnd && me.live ? " · renews or ends on " + new Date(me.periodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : ""),
-			h("div", { class: "btns" }, me.hasBilling ? btn("Manage billing", "card", (e) => act(e.currentTarget, async () => { const r = await api("/api/billing/portal", {}); location.href = r.portal; }), "main") : null,
-				!me.live ? btn("Choose a plan and pay", "card", (e) => act(e.currentTarget, async () => { const r = await api("/api/billing/checkout", {}); location.href = r.checkout; }), "main") : null),
-			h("p", { class: "hint" }, "Cards, receipts, changing plan and cancelling are handled securely by Stripe.")) : null,
+		me.role === "client" ? planCard(me) : null,
 		h("div", { class: "card" }, h("h2", null, "Your details"), field("Name", name), h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/settings", { name: name.value }), "Saved"), "main"))),
 		h("div", { class: "card" }, h("h2", null, "Change your password"), field("Current password", cur), field("New password", next, "At least 10 characters."),
 			h("div", { class: "btns" }, btn("Change password", "key", (e) => act(e.currentTarget, async () => { await api("/api/password", { current: cur.value, next: next.value }); return api("/api/state"); }, "Password changed. Other devices are signed out.")))),
@@ -508,6 +609,23 @@ function account() {
 		h("div", { class: "btns" }, btn("Sign out", "out", async () => { await api("/api/signout", {}); location.href = "/signin"; }), btn("Sign out everywhere", "out", async () => { await api("/api/signout-all", {}); location.href = "/signin"; })));
 }
 
+// A client's plan: what they're on, and the paid plans they can move up to (monthly or yearly) when they're not paying.
+function planCard(me) {
+	const plans = state.plans || [];
+	const mine = plans.find((p) => p.id === me.plan);
+	const paying = me.status === "active" || me.status === "trialing";
+	const paid = plans.filter((p) => !p.free);
+	const pay = (p, yearly) => (e) => act(e.currentTarget, async () => { const r = await api("/api/billing/checkout", { plan: p.id, yearly }); location.href = r.checkout; });
+	return h("div", { class: "card" }, h("h2", null, "Your plan"),
+		h("p", null, h("b", null, mine ? mine.name : "No plan"), " · ", me.unverified ? "waiting for you to confirm your email" : me.live ? (mine && mine.free ? "free" : "active") : "not active",
+			me.periodEnd && paying ? " · renews or ends on " + new Date(me.periodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : ""),
+		mine ? h("p", { class: "hint" }, planLine(mine)) : null,
+		!paying && paid.length ? h("div", { class: "plans" }, paid.map((p) => h("div", { class: "tile" }, h("b", null, icon("up"), p.name), h("div", { style: "font-size:20px;font-weight:800;margin:6px 0" }, p.price || ""), h("span", null, planLine(p)),
+			h("div", { class: "btns" }, btn(p.price ? "Pay monthly" : "Choose", "card", pay(p, false), "main small"), p.priceYear ? btn("Pay yearly (" + p.priceYear + ")", "card", pay(p, true), "small") : null)))) : null,
+		h("div", { class: "btns" }, me.hasBilling ? btn("Manage billing", "card", (e) => act(e.currentTarget, async () => { const r = await api("/api/billing/portal", {}); location.href = r.portal; }), "main") : null),
+		h("p", { class: "hint" }, "Cards, receipts, changing plan and cancelling are handled securely by Stripe."));
+}
+
 // API keys and the AI connector. A new key is shown once, straight after it's made.
 let newKey = null;
 function apiCard() {
@@ -515,7 +633,7 @@ function apiCard() {
 	const kname = h("input", { placeholder: "Zapier, Backup script…" });
 	const change = h("input", { type: "checkbox" });
 	return h("div", { class: "card" }, h("h2", null, "API and AI connector"),
-		h("p", null, "Use what you watch in your own scripts and tools, or ask Claude about it. ", h("a", { href: "https://paulobrien.dev/watch/api/", target: "_blank", rel: "noopener" }, "How the API works")),
+		h("p", null, "Use what you watch in your own scripts and tools, or ask Claude about it. ", h("a", { href: window.SW.docs, target: "_blank", rel: "noopener" }, "How the API works")),
 		h("label", null, "Your API address"), copyBox(c.api),
 		newKey ? h("div", { class: "ok" }, h("b", null, "Copy your new key now. "), "It won't be shown again.", copyBox(newKey)) : null,
 		h("h3", { style: "margin-top:16px" }, "API keys"),
@@ -541,7 +659,11 @@ function admin() {
 	const pl = pe && pe.plan ? a.plans.find((x) => x.id === pe.plan) : null;
 	const pf = { name: h("input", { value: pl ? pl.name : "" }), priceLabel: h("input", { value: pl ? pl.price || "" : "", placeholder: "£9 a month" }), stripePrice: h("input", { value: pl ? pl.stripePrice || "" : "", placeholder: "price_..." }),
 		monitors: h("input", { inputmode: "numeric", value: pl ? pl.monitors : 5 }), minEvery: h("select", null, [1, 5, 10, 15, 30, 60].map((n) => h("option", { value: n, selected: (pl ? pl.minEvery : 5) === n }, "Every " + everyWords(n)))),
-		pages: h("input", { inputmode: "numeric", value: pl ? pl.pages : 1 }), blurb: h("input", { value: pl ? pl.blurb || "" : "" }), on: h("input", { type: "checkbox", checked: pl ? pl.on : true }), position: h("input", { inputmode: "numeric", value: pl ? pl.position : 0 }) };
+		pages: h("input", { inputmode: "numeric", value: pl ? pl.pages : 1 }), blurb: h("input", { value: pl ? pl.blurb || "" : "" }), on: h("input", { type: "checkbox", checked: pl ? pl.on : true }), position: h("input", { inputmode: "numeric", value: pl ? pl.position : 0 }),
+		free: h("input", { type: "checkbox", checked: pl ? pl.free : false }), stripePriceYear: h("input", { value: pl ? pl.stripePriceYear || "" : "", placeholder: "price_... (optional)" }), priceYear: h("input", { value: pl ? pl.priceYear || "" : "", placeholder: "£50 a year" }),
+		alertsPerDay: h("input", { inputmode: "numeric", value: pl && pl.alertsPerDay ? pl.alertsPerDay : "", placeholder: "No limit" }),
+		channels: h("select", null, [["all", "Every channel"], ["push", "Email and browser alerts"], ["email", "Email only"]].map(([v, l]) => h("option", { value: v, selected: (pl ? pl.channels : "all") === v }, l))) };
+	const cap = h("input", { inputmode: "numeric", value: a.signupCap });
 	return h("div", null, h("h1", null, "Admin"), h("p", { class: "lead" }, "Settings for this whole install."),
 		h("div", { class: "card" }, h("h2", null, "Sending email"),
 			!a.emailBinding ? msg("err", "The EMAIL binding is missing from the Worker, so no email can be sent. See the README.") : null,
@@ -557,20 +679,23 @@ function admin() {
 			!a.stripeKey || !a.stripeWebhook ? msg("err", "Add the STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET secrets to this Worker in Cloudflare first (Settings, Variables and Secrets). The README has the steps.") : msg("ok", "Stripe keys found."),
 			h("label", null, "Stripe webhook address"), copyBox(a.webhookUrl), h("p", { class: "hint" }, "In Stripe, add this as a webhook endpoint for: checkout.session.completed, customer.subscription.created, customer.subscription.updated and customer.subscription.deleted."),
 			h("label", { class: "check" }, sell, "Open sign-up to clients"), a.sell ? [h("label", null, "Sign-up page"), copyBox(a.signupUrl)] : null,
-			h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/admin/install", { sell: sell.checked }), "Saved"), "main"))),
+			field("Most new accounts a day", cap, "For everyone together, so a script can't fill the database. Each address can also make 3 a day at most."),
+			h("p", { class: "hint" }, a.queue ? "Checks run through your Cloudflare Queue, so there's room for thousands of websites." : "Checks run about 40 a minute. For more, add a Cloudflare Queue (see the README, Lots of websites)."),
+			h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/admin/install", { sell: sell.checked, signupCap: Number(cap.value) }), "Saved"), "main"))),
 		h("div", { class: "card" }, h("h2", null, "Plans"), h("p", { class: "hint" }, "Make a product with a monthly or yearly price in Stripe, then paste its price ID here. The price text is what the sign-up page shows."),
 			a.plans.length ? h("table", null, h("tr", null, h("th", null, "Plan"), h("th", null, "Includes"), h("th", null, "")), a.plans.map((x) => h("tr", null,
-				h("td", null, h("b", null, x.name), h("div", { class: "hint" }, (x.price || "No price text") + (x.on ? "" : " · switched off") + (x.stripePrice ? "" : " · no Stripe price yet"))),
+				h("td", null, h("b", null, x.name), h("div", { class: "hint" }, (x.price || "No price text") + (x.on ? "" : " · switched off") + (x.free ? " · free" : x.stripePrice ? "" : " · no Stripe price yet"))),
 				h("td", null, x.monitors + " things, every " + everyWords(x.minEvery) + ", " + x.pages + " status page" + (x.pages === 1 ? "" : "s")),
 				h("td", null, h("div", { class: "btns", style: "margin:0" }, btn("Edit", "edit", () => { editing = { plan: x.id }; draw(); }, "small"), btn("Delete", "trash", (e) => act(e.currentTarget, () => api("/api/admin/plans/" + x.id, undefined, "DELETE")), "small danger")))))) : h("p", { class: "hint" }, "No plans yet."),
-			pe ? h("div", { class: "note" }, h("h3", null, pl ? "Edit " + pl.name : "New plan"), h("div", { class: "two" }, field("Name", pf.name), field("Price text", pf.priceLabel), field("Stripe price ID", pf.stripePrice), field("Things to watch", pf.monitors), field("Fastest checks", pf.minEvery), field("Status pages", pf.pages), field("Order on the page", pf.position), field("Short description", pf.blurb)),
+			pe ? h("div", { class: "note" }, h("h3", null, pl ? "Edit " + pl.name : "New plan"), h("div", { class: "two" }, field("Name", pf.name), field("Price text", pf.priceLabel), field("Stripe price ID", pf.stripePrice), field("Yearly price text", pf.priceYear), field("Yearly Stripe price ID", pf.stripePriceYear), field("Things to watch", pf.monitors), field("Fastest checks", pf.minEvery), field("Status pages", pf.pages), field("Alerts can go to", pf.channels), field("Most alerts a day", pf.alertsPerDay), field("Order on the page", pf.position), field("Short description", pf.blurb)),
+				h("label", { class: "check" }, pf.free, "Free plan: no Stripe price, people confirm their email address instead"),
 				h("label", { class: "check" }, pf.on, "Offer this plan on the sign-up page"),
-				h("div", { class: "btns" }, btn("Save plan", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/admin/plans", { id: pl ? pl.id : undefined, name: pf.name.value, priceLabel: pf.priceLabel.value, stripePrice: pf.stripePrice.value, monitors: Number(pf.monitors.value), minEvery: Number(pf.minEvery.value), pages: Number(pf.pages.value), position: Number(pf.position.value), blurb: pf.blurb.value, on: pf.on.checked }); editing = null; return r; }, "Plan saved"), "main"), btn("Cancel", "x", () => { editing = null; draw(); })))
+				h("div", { class: "btns" }, btn("Save plan", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/admin/plans", { id: pl ? pl.id : undefined, name: pf.name.value, priceLabel: pf.priceLabel.value, stripePrice: pf.stripePrice.value, stripePriceYear: pf.stripePriceYear.value, priceLabelYear: pf.priceYear.value, free: pf.free.checked, alertsPerDay: pf.alertsPerDay.value, channels: pf.channels.value, monitors: Number(pf.monitors.value), minEvery: Number(pf.minEvery.value), pages: Number(pf.pages.value), position: Number(pf.position.value), blurb: pf.blurb.value, on: pf.on.checked }); editing = null; return r; }, "Plan saved"), "main"), btn("Cancel", "x", () => { editing = null; draw(); })))
 				: h("div", { class: "btns" }, btn("New plan", "plus", () => { editing = { plan: null }; draw(); }))),
 		h("div", { class: "card" }, h("h2", null, "Clients"), a.clients.length ? h("table", null, h("tr", null, h("th", null, "Client"), h("th", null, "Plan"), h("th", null, "")), a.clients.map((c) => h("tr", null,
 			h("td", null, h("b", null, c.name || c.email), h("div", { class: "hint" }, c.email + " · joined " + when(c.created_at) + " · watching " + c.monitors)),
-			h("td", null, ((a.plans.find((p) => p.id === c.plan) || {}).name || "None"), h("div", { class: c.status === "active" || c.status === "trialing" ? "t-up" : "t-unsure" }, c.status === "none" ? "not paid" : c.status.replace("_", " "))),
-			h("td", null, h("div", { class: "btns", style: "margin:0" }, c.status === "active" || c.status === "trialing" ? btn("Hold", "pause", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "none" })), "small") : btn("Make active free", "play", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "active" })), "small"),
+			h("td", null, ((a.plans.find((p) => p.id === c.plan) || {}).name || "None"), h("div", { class: ["active", "trialing", "free"].includes(c.status) ? "t-up" : "t-unsure" }, c.status === "none" ? "not paid" : c.status === "unverified" ? "email not confirmed" : c.status.replace("_", " "))),
+			h("td", null, h("div", { class: "btns", style: "margin:0" }, ["active", "trialing", "free"].includes(c.status) ? btn("Hold", "pause", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "none" })), "small") : btn("Make active free", "play", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "active" })), "small"),
 				btn("Delete", "trash", (e) => { if (confirm("Delete " + c.email + " and everything they watch? Cancel their subscription in Stripe too.")) act(e.currentTarget, () => api("/api/admin/clients/" + c.id, undefined, "DELETE")); }, "small danger")))))) : h("p", { class: "hint" }, "No clients yet.")),
 		h("div", { class: "card" }, h("h2", null, "Licence"), h("p", null, "Site Watch is free for one person or organisation's own websites, up to " + a.licence.limit + ". You're watching " + a.licence.websites + ". Going over that, running it for clients or offering it as a service needs a commercial licence."),
 			h("div", { class: "btns" }, h("a", { class: "btn", href: "https://paulobrien.dev/contact/", target: "_blank", rel: "noopener" }, icon("open"), "Ask about a commercial licence"))));
@@ -582,6 +707,7 @@ async function start() {
 	const path = location.pathname;
 	if (path === "/setup") return setupView();
 	if (path === "/reset") return resetView();
+	if (path === "/verify") return verifyView();
 	if (path === "/signup" && !who.signedIn) return signupView();
 	if (!who.hasOwner) return centre(h("div", { class: "card" }, h("h1", null, "Almost there"), h("p", null, "Open your set-up link to make the owner's account: this address followed by /setup?code= and the SETUP_TOKEN secret you chose when you installed.")));
 	if (!who.signedIn) return signinView();
@@ -589,6 +715,8 @@ async function start() {
 	state = await api("/api/state");
 	const paid = new URLSearchParams(location.search).get("paid");
 	if (paid === "1") flashText = "Thanks! Your payment is going through. Your plan switches on in a few seconds.";
+	if (new URLSearchParams(location.search).get("confirmed") === "1") flashText = "Thanks, your email address is confirmed. We've started checking.";
+	if (location.search) history.replaceState(null, "", "/" + location.hash);
 	draw();
 	if (paid === "1") setTimeout(async () => { state = await api("/api/state"); flashText = ""; draw(); }, 5000);
 }

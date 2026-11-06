@@ -7,13 +7,17 @@ import {
 	alertFor, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, stateOf, step,
 	type Cert, type Registration,
 } from "./core.ts";
-import { accountById, ensureSchema, install, type AccountRow, type Env, type MonitorRow } from "./db.ts";
+import { accountById, ensureSchema, install, LIVE_SQL, type AccountRow, type CheckBatch, type Env, type MonitorRow } from "./db.ts";
 
 /** Checks per run, and how many at once (Workers allow six open connections; the free plan 50 requests a run). */
 const PER_RUN = 40;
 const AT_ONCE = 6;
 /** Websites whose certificate and renewal are looked up per run (each is up to three requests). */
 const DAILY_PER_RUN = 3;
+/** With a queue (env.CHECKS): checks handed out per run, and how many go in one message. */
+const QUEUED_PER_RUN = 5000;
+const PER_MESSAGE = 20;
+const DAILY_QUEUED_PER_RUN = 200;
 /** A run that starts this late has its failures ignored: Cloudflare sometimes starts runs minutes late, and a late
  *  start can make a healthy site look slow. */
 const LATE_MS = 60_000;
@@ -83,8 +87,45 @@ export async function contextOf(env: Env): Promise<Ctx> {
 	return { link: inst.origin ? `${inst.origin}/` : "your Site Watch address", helloName: inst.origin ? new URL(inst.origin).hostname : "sitewatch.invalid", app: inst.brand.name };
 }
 
-/** Only accounts that are live (the owner, and clients whose subscription is paid) have their checks run. */
-const LIVE = `account_id IN (SELECT id FROM accounts WHERE role = 'owner' OR status IN ('active', 'trialing'))`;
+/** Only accounts that are live (the owner, clients whose subscription is paid, and confirmed free clients) are checked. */
+const LIVE = LIVE_SQL;
+
+const chunk = <T>(xs: T[], n: number) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
+
+/** Hands due checks to the queue. Each is marked as looked at first, so the next run doesn't send it again. */
+async function enqueue(env: Env, ids: string[], batch: Omit<CheckBatch, "ids">, mark: string): Promise<void> {
+	const db = env.DB;
+	for (const part of chunk(ids, 90)) {
+		await db.prepare(`UPDATE monitors SET ${mark} = ? WHERE id IN (${part.map(() => "?").join(",")})`).bind(iso(new Date(batch.at)), ...part).run();
+	}
+	for (const group of chunk(chunk(ids, PER_MESSAGE), 100)) await env.CHECKS!.sendBatch(group.map((g) => ({ body: { ...batch, ids: g } })));
+}
+
+/** The queue's side: checks one message's monitors. Called by Cloudflare with a few messages at a time. */
+export async function runQueue(env: Env, messages: readonly Message<CheckBatch>[]): Promise<void> {
+	const db = env.DB;
+	await ensureSchema(db);
+	const ctx = await contextOf(env);
+	const accounts = new Map<string, AccountRow | null>();
+	const accountOf = async (id: string) => {
+		if (!accounts.has(id)) accounts.set(id, await accountById(db, id));
+		return accounts.get(id)!;
+	};
+	for (const m of messages) {
+		const { ids, daily, late, at } = m.body;
+		const now = new Date();
+		// A message that waited too long counts as late: failures from it aren't trusted.
+		const stale = late || now.getTime() - at > LATE_MS;
+		const { results } = await db.prepare(`SELECT * FROM monitors WHERE id IN (${ids.map(() => "?").join(",")}) AND ${LIVE}`).bind(...ids).all<MonitorRow>();
+		await inBatches(results, AT_ONCE, async (row) => {
+			const a = await accountOf(row.account_id);
+			if (!a) return;
+			if (daily) await dailyOne(env, row, a, now, ctx);
+			else await checkOne(env, row, a, now, ctx, { late: stale });
+		});
+		m.ack();
+	}
+}
 
 export async function runScheduled(env: Env, scheduledTime: number): Promise<void> {
 	const db = env.DB;
@@ -99,12 +140,23 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 		return accounts.get(id)!;
 	};
 
+	const queued = !!env.CHECKS;
 	const { results: due } = await db.prepare(
-		`SELECT * FROM monitors
+		`SELECT ${queued ? "id" : "*"} FROM monitors
 		 WHERE ${LIVE} AND (paused_until IS NULL OR paused_until <= ?1)
 		   AND (checked_at IS NULL OR checked_at <= strftime('%Y-%m-%dT%H:%M:%SZ', ?1, '-' || (CASE kind WHEN 'heartbeat' THEN ${HEARTBEAT_LOOK} ELSE every END) || ' minutes', '+20 seconds'))
-		 ORDER BY checked_at IS NOT NULL, checked_at LIMIT ${PER_RUN}`,
+		 ORDER BY checked_at IS NOT NULL, checked_at LIMIT ${queued ? QUEUED_PER_RUN : PER_RUN}`,
 	).bind(at).all<MonitorRow>();
+	if (queued) {
+		// Everything due goes to the queue, a batch to a message; Cloudflare runs as many at once as it needs.
+		await enqueue(env, due.map((r) => r.id), { late, at: now.getTime() }, "checked_at");
+		const { results: daily } = await db.prepare(
+			`SELECT id FROM monitors WHERE ${LIVE} AND kind = 'website' AND extras = 1 AND (daily_at IS NULL OR daily_at <= ?) ORDER BY daily_at IS NOT NULL, daily_at LIMIT ${DAILY_QUEUED_PER_RUN}`,
+		).bind(minutesAgo(now, 24 * 60)).all<{ id: string }>();
+		if (daily.length) await enqueue(env, daily.map((r) => r.id), { daily: true, at: now.getTime() }, "daily_at");
+		await tidy(db, now);
+		return;
+	}
 	await inBatches(due, AT_ONCE, async (row) => {
 		const a = await accountOf(row.account_id);
 		if (a) await checkOne(env, row, a, now, ctx, { late });
@@ -118,5 +170,12 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 		if (a) await dailyOne(env, row, a, now, ctx).catch((e) => console.error("daily look failed", e));
 	}
 
-	if (now.getUTCMinutes() === 7) await db.prepare(`DELETE FROM alerts WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY id DESC) AS n FROM alerts) WHERE n > ${KEEP_ALERTS})`).run();
+	await tidy(db, now);
+}
+
+/** Once an hour: old alerts beyond the last 500 an account, and sign-up records older than a day. */
+async function tidy(db: D1Database, now: Date): Promise<void> {
+	if (now.getUTCMinutes() !== 7) return;
+	await db.prepare(`DELETE FROM alerts WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY id DESC) AS n FROM alerts) WHERE n > ${KEEP_ALERTS})`).run();
+	await db.prepare("DELETE FROM signups WHERE at < ?").bind(minutesAgo(now, 24 * 60)).run();
 }
