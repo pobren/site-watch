@@ -9,6 +9,8 @@
 //   /status/<address>    public status pages (status.ts), or / on a status page's own domain
 //   /stripe/webhook      Stripe, when selling to clients is on (billing.ts)
 //   /sw.js               the service worker that shows browser alerts (push.ts)
+//   /api/app/*           apps on phones and computers: sign-in, QR codes and alerts through Apple (apps.ts, apns.ts)
+//   /app/connect         where a sign-in QR code points
 //
 // Every minute the cron (cron.ts) checks whatever is due, itself or through a Cloudflare Queue on big installs.
 // With static files (the ASSETS binding), people who aren't signed in see the home page at / instead of sign-in.
@@ -23,9 +25,9 @@ import { configure, WL } from "./whitelabel.ts";
 import { handleConnector, isConnectorPath } from "./connect.ts";
 import { findPage, renderStatus } from "./status.ts";
 import { handleV1 } from "./v1.ts";
-import { appPage } from "./ui.ts";
+import { appPage, connectPage } from "./ui.ts";
 
-const VERSION = "1.4.0";
+const VERSION = "1.5.0";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -94,6 +96,17 @@ export default {
 		if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
 		const page = await findPage(env.DB, path, url.hostname);
 		if (page) return withHeaders(await renderStatus(env.DB, page), { "x-frame-options": "SAMEORIGIN" });
+
+		// The QR code on the Account tab holds this address. The app reads it; a phone's camera opens the app here once
+		// it's installed (universal links), or this page, which says what to do.
+		if (path === "/app/connect") {
+			const b = (await install(env.DB)).brand;
+			return withHeaders(new Response(connectPage(b.name, b.colour), { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" } }));
+		}
+		if (path === "/.well-known/apple-app-site-association" && env.APNS_TEAM_ID && env.APNS_TOPIC) {
+			const id = `${env.APNS_TEAM_ID}.${env.APNS_TOPIC}`;
+			return Response.json({ applinks: { details: [{ appIDs: [id], components: [{ "/": "/app/connect", comment: "Sign in to the app with a QR code" }] }] }, webcredentials: { apps: [id] } });
+		}
 
 		if (path === "/sw.js") return new Response(SERVICE_WORKER, { headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-cache", "service-worker-allowed": "/" } });
 

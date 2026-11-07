@@ -6,6 +6,7 @@ import { EmailMessage } from "cloudflare:email";
 import { CHANNEL_KINDS, hookMonitor, webhookHeaders, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
 import { install, newId, planById, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { brandedHtml, toneOf, type EmailLook } from "./email.ts";
+import { sendApns } from "./apns.ts";
 import { sendPush, type PushSub } from "./push.ts";
 import { WL } from "./whitelabel.ts";
 
@@ -21,12 +22,27 @@ export async function pushTo(db: D1Database, c: Pick<ChannelRow, "url" | "secret
 	return sendPush(db, pushSubOf(c), { title: e.subject, body: e.text.split("\n").find((l) => l.trim()) ?? "", url: e.url, urgent: e.urgent, tag }, contact);
 }
 
-/** Which channels a plan allows: email always; browser push unless "email"; the rest only on "all". */
-export const planAllows = (plan: Pick<PlanRow, "channels"> | null, kind: string) => {
-	const c = plan?.channels ?? "all";
-	if (kind === "email" || c === "all") return true;
-	return kind === "push" && c === "push";
+import { planAllows } from "./core.ts";
+export { planAllows };
+
+/** An app's alerts (kind "apns") keep the device's Apple token in `url` and { device, sandbox } in `secret`. */
+const appOf = (c: Pick<ChannelRow, "secret">) => {
+	try {
+		const s = JSON.parse(c.secret ?? "{}") as { device?: string; sandbox?: boolean };
+		return { device: s.device ?? "", sandbox: s.sandbox === true };
+	} catch {
+		return { device: "", sandbox: false };
+	}
 };
+
+/** Sends an alert to one app on a phone or computer. "gone" when the app is signed out or removed. */
+export async function appTo(env: Env, account: Pick<AccountRow, "session_ver">, c: Pick<ChannelRow, "url" | "secret">, e: HookEvent, monitorId: string | null, tag?: string): Promise<"sent" | "gone" | "failed"> {
+	const { device, sandbox } = appOf(c);
+	// An app signed out by "Sign out everywhere" or a new password gets no more alerts.
+	const d = await env.DB.prepare("SELECT session_ver FROM app_devices WHERE id = ?").bind(device).first<{ session_ver: number }>();
+	if (!d || d.session_ver !== account.session_ver) return "gone";
+	return sendApns(env.DB, env, c.url, sandbox, { title: e.subject, body: e.text.split("\n").find((l) => l.trim()) ?? "", urgent: e.urgent, monitorId, tag });
+}
 
 /** Posts to one channel. True when the service took it. Your own webhook's posts are signed with its secret. */
 export async function postTo(c: Pick<ChannelRow, "kind" | "url" | "secret">, e: HookEvent): Promise<boolean> {
@@ -84,8 +100,8 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 		const contact = inst.alertFrom ? `mailto:${inst.alertFrom}` : (inst.origin ?? "mailto:alerts@example.com");
 		for (const c of results) {
 			if (account.role === "client" && !planAllows(plan, c.kind)) continue;
-			if (c.kind === "push") {
-				const r = await pushTo(db, c, e, contact, monitorId ?? undefined);
+			if (c.kind === "push" || c.kind === "apns") {
+				const r = c.kind === "apns" ? await appTo(env, account, c, e, monitorId, monitorId ?? undefined) : await pushTo(db, c, e, contact, monitorId ?? undefined);
 				sent.push(r === "sent" ? c.name : `${c.name} failed`);
 				if (r === "gone") await db.prepare("DELETE FROM channels WHERE id = ?").bind(c.id).run();
 				continue;

@@ -4,9 +4,10 @@
 // Everything belongs to an account. The owner (who installed it) has the first account. When "Sell to clients"
 // is switched on, clients sign up for one of the owner's plans and get accounts of their own.
 
+import type { ApnsEnv } from "./apns.ts";
 import type { WhiteLabelEnv } from "./whitelabel.ts";
 
-export interface Env extends WhiteLabelEnv {
+export interface Env extends WhiteLabelEnv, ApnsEnv {
 	DB: D1Database;
 	/** Cloudflare's send_email binding. Alerts by email need a domain with Email Routing on (see the README). */
 	EMAIL?: SendEmail;
@@ -144,6 +145,13 @@ const SCHEMA = [
 	`CREATE TABLE IF NOT EXISTS signups (ip_hash TEXT NOT NULL, at TEXT NOT NULL)`,
 	`CREATE INDEX IF NOT EXISTS signups_ip ON signups (ip_hash, at)`,
 	`CREATE INDEX IF NOT EXISTS monitors_due ON monitors (checked_at)`,
+	// 1.5.0: apps on phones and computers (apps.ts). Each signed-in app has its own key, kept as a SHA-256 hash, and
+	// stops working when its account signs out everywhere. Sign-in codes (the QR code on the Account tab) work once.
+	`CREATE TABLE IF NOT EXISTS app_devices (
+		id TEXT PRIMARY KEY, account_id TEXT NOT NULL, name TEXT NOT NULL, platform TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+		session_ver INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, last_used TEXT)`,
+	`CREATE INDEX IF NOT EXISTS app_devices_account ON app_devices (account_id)`,
+	`CREATE TABLE IF NOT EXISTS app_codes (code_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires INTEGER NOT NULL)`,
 ];
 /** Columns added after 1.0.0. Each is tried on its own, as it may already be there. */
 const COLUMNS = [
@@ -154,7 +162,7 @@ const COLUMNS = [
 	"ALTER TABLE plans ADD COLUMN price_label_year TEXT",
 	"ALTER TABLE accounts ADD COLUMN verify_token TEXT",
 ];
-const SCHEMA_VERSION = "3";
+const SCHEMA_VERSION = "4";
 
 let ready: Promise<void> | null = null;
 

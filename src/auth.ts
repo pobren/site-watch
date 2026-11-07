@@ -1,7 +1,9 @@
 // Accounts and sessions. The owner's account is made at /setup with the SETUP_TOKEN secret, so nobody else can
 // claim a new install first. Sign-in sets a signed cookie for 30 days; "Sign out everywhere" ends every older one.
 
+import { iso } from "./core.ts";
 import { accountById, getMeta, newId, setMeta, type AccountRow } from "./db.ts";
+import { sha256 } from "./keys.ts";
 
 const COOKIE = "sw_session";
 const DAYS = 30;
@@ -72,8 +74,31 @@ export async function sessionCookie(db: D1Database, a: Pick<AccountRow, "id" | "
 
 export const clearCookie = (secure: boolean) => `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secure ? "; Secure" : ""}`;
 
-/** The signed-in account, or null. */
+/** App keys start with this. Apps (iPhone, iPad, Mac) send one as "Authorization: Bearer swapp_..." instead of a cookie. */
+export const APP_KEY_PREFIX = "swapp_";
+const APP_KEY = /^Bearer (swapp_[0-9a-f]{48})$/;
+
+export interface AppDeviceRow { id: string; account_id: string; name: string; platform: string; token_hash: string; session_ver: number; created_at: string; last_used: string | null }
+
+/** The app signed in with this request's app key, and its account. Null when there's no key or it no longer works:
+ *  removed, or "Sign out everywhere" (or a new password) since it was made. */
+export async function currentApp(request: Request, db: D1Database): Promise<{ device: AppDeviceRow; account: AccountRow } | null> {
+	const m = APP_KEY.exec(request.headers.get("authorization") ?? "");
+	if (!m) return null;
+	const device = await db.prepare("SELECT * FROM app_devices WHERE token_hash = ?").bind(await sha256(m[1])).first<AppDeviceRow>();
+	if (!device) return null;
+	const account = await accountById(db, device.account_id);
+	if (!account || account.session_ver !== device.session_ver) return null;
+	// Noted at most once an hour, to keep writes down.
+	if (!device.last_used || Date.now() - Date.parse(device.last_used) > 3_600_000) {
+		await db.prepare("UPDATE app_devices SET last_used = ? WHERE id = ?").bind(iso(new Date()), device.id).run();
+	}
+	return { device, account };
+}
+
+/** The signed-in account (by cookie, or an app's key), or null. */
 export async function currentAccount(request: Request, db: D1Database): Promise<AccountRow | null> {
+	if (request.headers.has("authorization")) return (await currentApp(request, db))?.account ?? null;
 	const m = new RegExp(`(?:^|;\\s*)${COOKIE}=([0-9a-f]{16})\\.(\\d+)\\.(\\d+)\\.([0-9a-f]{64})`).exec(request.headers.get("cookie") ?? "");
 	if (!m || Number(m[3]) < Date.now()) return null;
 	if (!sameText(await sign(await sessionKey(db), `${m[1]}.${m[2]}.${m[3]}`), m[4])) return null;

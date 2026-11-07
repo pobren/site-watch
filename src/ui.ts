@@ -17,6 +17,16 @@ export function appPage(brand: Brand, version: string, docs = "https://paulobrie
 <script>${JS}</script></body></html>`;
 }
 
+/** Where a sign-in QR code points, for someone who scans it with their phone's camera instead of the app. */
+export function connectPage(name: string, colour: string): string {
+	const n = esc(name);
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to the ${n} app</title><meta name="robots" content="noindex">
+<style>body{margin:0;font:18px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#0f172a;background:#f1f5f9;display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box}
+.card{background:#fff;border:1px solid #e2e8f0;border-radius:16px;padding:24px;max-width:440px}h1{font-size:26px;line-height:1.2;margin:0 0 12px}ol{padding-left:22px;margin:0}li{margin:8px 0}b{color:${esc(colour)}}</style></head>
+<body><div class="card"><h1>Sign in to the ${n} app</h1><p>This code is for the ${n} app. To use it:</p>
+<ol><li>Open the <b>${n}</b> app on this phone.</li><li>Tap <b>Scan a QR code</b>.</li><li>Point it at the code on your computer screen.</li></ol></div></body></html>`;
+}
+
 const CSS = `
 :root{--brand:#0f766e;--ink:#0f172a;--soft:#475569;--faint:#94a3b8;--line:#e2e8f0;--bg:#f1f5f9;--card:#fff;--up:#15803d;--down:#b91c1c;--warn:#b45309;--info:#1d4ed8}
 *{box-sizing:border-box}
@@ -603,10 +613,43 @@ function account() {
 		h("div", { class: "card" }, h("h2", null, "Your details"), field("Name", name), h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/settings", { name: name.value }), "Saved"), "main"))),
 		h("div", { class: "card" }, h("h2", null, "Change your password"), field("Current password", cur), field("New password", next, "At least 10 characters."),
 			h("div", { class: "btns" }, btn("Change password", "key", (e) => act(e.currentTarget, async () => { await api("/api/password", { current: cur.value, next: next.value }); return api("/api/state"); }, "Password changed. Other devices are signed out.")))),
+		appsCard(),
 		apiCard(),
 		h("div", { class: "card" }, h("h2", null, "Your data"), h("p", null, "Download everything as a JSON file: what you watch, its history, your channels and status pages."),
 			h("div", { class: "btns" }, h("a", { class: "btn", href: "/api/export" }, icon("down"), "Download my data"))),
-		h("div", { class: "btns" }, btn("Sign out", "out", async () => { await api("/api/signout", {}); location.href = "/signin"; }), btn("Sign out everywhere", "out", async () => { await api("/api/signout-all", {}); location.href = "/signin"; })));
+		h("div", { class: "btns" }, btn("Sign out", "out", async () => { await api("/api/signout", {}); location.href = "/signin"; }), btn("Sign out everywhere", "out", async () => { await api("/api/signout-all", {}); location.href = "/signin"; })),
+		state.apps && state.apps.canDelete ? deleteCard() : null);
+}
+
+// Apps on phones and computers: a QR code to sign one in, and the ones signed in now.
+let qr = null;
+const PLATFORM = { iphone: "iPhone", ipad: "iPad", mac: "Mac", android: "Android", windows: "Windows", other: "App" };
+function appsCard() {
+	const a = state.apps || { list: [] };
+	const showQr = (e) => act(e.currentTarget, async () => { qr = await api("/api/app/qr", {}); setTimeout(() => { if (qr && Date.parse(qr.expires) <= Date.now()) { qr = null; draw(); } }, 5 * 60_000 + 500); });
+	return h("div", { class: "card" }, h("h2", null, icon("phone"), " Apps on your phone and computer"),
+		h("p", null, "Sign in on the app with your email address and password, or scan a code instead."),
+		qr ? h("div", { class: "note", style: "text-align:center" },
+			h("img", { src: qr.qr, alt: "QR code to sign in on the app", width: 220, height: 220, style: "image-rendering:pixelated;max-width:100%" }),
+			h("p", null, h("b", null, "Open the app, tap Scan a QR code and point it here.")),
+			h("p", { class: "hint" }, "It works once, for 5 minutes. Only show it to yourself."),
+			h("div", { class: "btns", style: "justify-content:center" }, btn("Done", "check", () => { qr = null; draw(); }, "main")))
+			: h("div", { class: "btns" }, btn("Sign in on your phone", "phone", showQr, "main")),
+		a.list.length ? h("table", null, h("tr", null, h("th", null, "App"), h("th", null, "Alerts"), h("th", null, "Last used"), h("th", null, "")),
+			a.list.map((d) => h("tr", null, h("td", null, h("b", null, d.name), h("div", { class: "hint" }, PLATFORM[d.platform] || "App")),
+				h("td", null, d.alerts ? "On" : "Off"), h("td", null, ago(d.lastUsed || d.created)),
+				h("td", null, btn("Sign out", "out", (e) => act(e.currentTarget, async () => { await api("/api/app/devices/" + d.id, undefined, "DELETE"); return api("/api/state"); }, "Signed out " + d.name), "small danger")))))
+			: null,
+		a.alerts || state.me.role !== "owner" ? null : h("p", { class: "hint" }, "Alerts in the app need setting up on this install first (see App alerts in the README)."));
+}
+
+// Deleting your own account: everything goes, and any subscription ends.
+function deleteCard() {
+	const pw = h("input", { type: "password", autocomplete: "current-password" });
+	return h("div", { class: "card" }, h("h2", null, "Delete my account"),
+		h("p", null, "This deletes your account and everything in it straight away: what you watch, its history, alerts, status pages and apps. Any subscription is cancelled. It can't be undone."),
+		field("Your password", pw),
+		h("div", { class: "btns" }, btn("Delete my account", "trash", (e) => { if (confirm("Delete your account and everything in it? This can't be undone.")) act(e.currentTarget, async () => { await api("/api/account/delete", { password: pw.value }); location.href = "/"; }); }, "danger")));
 }
 
 // A client's plan: what they're on, and the paid plans they can move up to (monthly or yearly) when they're not paying.

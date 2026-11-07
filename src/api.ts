@@ -1,7 +1,9 @@
 // The JSON the app page uses. Everything here needs someone signed in, apart from set-up, sign-in and sign-up.
 // Each account sees only its own things; the owner also gets the Admin routes (branding, plans, clients).
 
-import { deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
+import { appTo, deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
+import { apnsReady } from "./apns.ts";
+import { deleteAccount, handleApps, listApps } from "./apps.ts";
 import { handleAuth, json } from "./api-auth.ts";
 import { currentAccount } from "./auth.ts";
 import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
@@ -43,7 +45,9 @@ async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
 	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null };
 }
 
-const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, push: "Browser alerts" };
+const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, push: "Browser alerts", apns: "App alerts" };
+/** Where a channel sends, as the Alerts tab shows it. Push and app alerts don't show their secret addresses. */
+const whereOf = (c: { kind: string; url: string; name: string }) => (c.kind === "push" ? new URL(c.url).hostname : c.kind === "apns" ? "Apple" : maskUrl(c.url));
 
 async function everything(env: Env, me: AccountRow, origin: string) {
 	const db = env.DB;
@@ -60,7 +64,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified" },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
-		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: c.kind === "push" ? new URL(c.url).hostname : maskUrl(c.url), secret: c.kind === "push" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
+		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "push" || c.kind === "apns" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
 		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: `${origin}/status/${p.slug}` })),
 		notices: notices.results,
 		alerts: alerts.results,
@@ -70,6 +74,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		brand: inst.brand,
 		apiKeys: await listKeys(db, me.id),
 		connector: { address: `${origin}/mcp`, api: `${origin}/api/v1`, linked: await connectorLinked(db, me.id, Date.now()) },
+		apps: { list: await listApps(db, me.id, me.session_ver), alerts: apnsReady(env), canDelete: me.role === "client" },
 	};
 	if (me.role === "owner") {
 		const [clients, plans] = await Promise.all([
@@ -141,6 +146,8 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	const db = env.DB;
 	const auth = await handleAuth(request, env, path, url);
 	if (auth) return auth;
+	const apps = await handleApps(request, env, path, url);
+	if (apps) return apps;
 	const me = await currentAccount(request, db);
 	const billing = await handleBilling(request, env, path, url, me);
 	if (billing) return billing;
@@ -289,6 +296,11 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		if (ch[2]) {
 			const test = { event: "test" as const, subject: `Test alert from ${inst.brand.name}`, text: `If you can read this, ${inst.brand.name} alerts will arrive here.`, urgent: false, url: ctx.link, sentAt: iso(new Date()), app: inst.brand.name };
+			if (c.kind === "apns") {
+				const r = await appTo(env, me, c, test, null, "test");
+				if (r === "gone") await db.prepare("DELETE FROM channels WHERE id = ?").bind(c.id).run();
+				return r === "sent" ? reply({ ok: true }) : bad(r === "gone" ? "That app is signed out, so we've removed it. Sign in on the app again to turn alerts back on." : "Apple didn't take the test. Please try again in a minute.", 502);
+			}
 			if (c.kind === "push") {
 				const r = await pushTo(db, c, test, inst.alertFrom ? `mailto:${inst.alertFrom}` : url.origin, "test");
 				if (r === "gone") await db.prepare("DELETE FROM channels WHERE id = ?").bind(c.id).run();
@@ -467,11 +479,7 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const c = await db.prepare("SELECT id FROM accounts WHERE id = ? AND role = 'client'").bind(cl[1]).first();
 		if (!c) return bad("We couldn't find that client.", 404);
 		if (method === "DELETE") {
-			await db.batch([
-				db.prepare("DELETE FROM notices WHERE page_id IN (SELECT id FROM pages WHERE account_id = ?)").bind(cl[1]),
-				...["pages", "monitors", "channels", "alerts", "api_keys", "oauth_codes", "oauth_tokens"].map((t) => db.prepare(`DELETE FROM ${t} WHERE account_id = ?`).bind(cl[1])),
-				db.prepare("DELETE FROM accounts WHERE id = ?").bind(cl[1]),
-			]);
+			await deleteAccount(db, cl[1]);
 			return reply();
 		}
 		// Free of charge (no Stripe), or held. Stripe's next webhook for them wins again.

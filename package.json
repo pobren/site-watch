@@ -1,6 +1,6 @@
 {
 	"name": "site-watch",
-	"version": "1.4.0",
+	"version": "1.5.0",
 	"private": true,
 	"description": "Watch your websites, mail servers, ports and scheduled jobs from your own Cloudflare account. Free for personal and small business use, source available.",
 	"license": "SEE LICENSE IN LICENSE",
@@ -31,11 +31,17 @@
 	},
 	"cloudflare": {
 		"label": "Site Watch",
-		"products": ["Workers", "D1"],
+		"products": [
+			"Workers",
+			"D1"
+		],
 		"bindings": {
 			"SETUP_TOKEN": {
 				"description": "A long secret code you choose (replace the example, which won't work). After deploying, open `https://<your Site Watch>/setup?code=<your code>` to make your account. Only someone with the code can."
 			}
 		}
+	},
+	"dependencies": {
+		"qrcode-generator": "^2.0.4"
 	}
 }
