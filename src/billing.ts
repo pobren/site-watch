@@ -4,6 +4,7 @@
 // cancelling are all Stripe's: clients manage theirs in Stripe's billing portal from their Account tab.
 //
 // Secrets on the Worker: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET. The webhook address is /stripe/webhook.
+// Optional variable STRIPE_MANAGED_PAYMENTS = "on": Stripe sells as merchant of record (Stripe Managed Payments).
 
 import { sendEmail } from "./alerts.ts";
 import { json } from "./api-auth.ts";
@@ -31,10 +32,14 @@ function form(params: Record<string, unknown>, prefix = ""): string[] {
 	return out;
 }
 
-export async function stripe<T = Record<string, unknown>>(env: Env, path: string, params?: Record<string, unknown>): Promise<T> {
+/** The Stripe API version we read and write. Managed Payments checkouts need a newer one (MANAGED_VERSION). */
+const VERSION = "2024-06-20";
+const MANAGED_VERSION = "2025-03-31.basil";
+
+export async function stripe<T = Record<string, unknown>>(env: Env, path: string, params?: Record<string, unknown>, version = VERSION): Promise<T> {
 	const res = await fetch(`${API}${path}`, {
 		method: params ? "POST" : "GET",
-		headers: { authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, "content-type": "application/x-www-form-urlencoded", "stripe-version": "2024-06-20" },
+		headers: { authorization: `Bearer ${env.STRIPE_SECRET_KEY}`, "content-type": "application/x-www-form-urlencoded", "stripe-version": version },
 		body: params ? form(params).join("&") : undefined,
 	});
 	const data = (await res.json()) as T & { error?: { message?: string } };
@@ -86,8 +91,11 @@ export async function sendVerify(env: Env, a: Pick<AccountRow, "email" | "verify
 async function checkout(env: Env, a: AccountRow, plan: PlanRow, origin: string, yearly = false): Promise<string> {
 	const price = yearly && plan.stripe_price_year ? plan.stripe_price_year : plan.stripe_price;
 	if (!price) throw new Error("this plan has no Stripe price");
+	// With Managed Payments, Stripe sells the plan as merchant of record and works out the tax itself.
+	const managed = env.STRIPE_MANAGED_PAYMENTS === "on";
 	const session = await stripe<{ url: string }>(env, "/checkout/sessions", {
 		mode: "subscription",
+		...(managed ? { managed_payments: { enabled: "true" } } : {}),
 		line_items: { 0: { price, quantity: 1 } },
 		client_reference_id: a.id,
 		...(a.stripe_customer ? { customer: a.stripe_customer } : { customer_email: a.email }),
@@ -96,7 +104,7 @@ async function checkout(env: Env, a: AccountRow, plan: PlanRow, origin: string, 
 		allow_promotion_codes: "true",
 		success_url: `${origin}/?paid=1`,
 		cancel_url: `${origin}/?paid=0`,
-	});
+	}, managed ? MANAGED_VERSION : VERSION);
 	return session.url;
 }
 
@@ -198,7 +206,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 	return null;
 }
 
-interface Sub { id: string; customer: string; status: string; current_period_end?: number; metadata?: Record<string, string>; items?: { data?: { price?: { id?: string } }[] } }
+interface Sub { id: string; customer: string; status: string; current_period_end?: number; metadata?: Record<string, string>; items?: { data?: { price?: { id?: string }; current_period_end?: number }[] } }
 
 async function webhook(request: Request, env: Env): Promise<Response> {
 	const body = await request.text();
@@ -233,8 +241,10 @@ async function saveSub(db: D1Database, account: string, sub: Sub): Promise<void>
 		await fitToPlan(db, account, free);
 		return;
 	}
+	// Newer Stripe versions (such as a new webhook endpoint's) keep the period end on the subscription item.
+	const periodEnd = sub.current_period_end ?? sub.items?.data?.[0]?.current_period_end;
 	await db.prepare("UPDATE accounts SET stripe_customer = ?, stripe_sub = ?, status = ?, plan = COALESCE(?, plan), period_end = ? WHERE id = ? AND role = 'client'")
-		.bind(sub.customer, sub.id, sub.status, plan?.id ?? sub.metadata?.plan ?? null, sub.current_period_end ? iso(new Date(sub.current_period_end * 1000)) : null, account).run();
+		.bind(sub.customer, sub.id, sub.status, plan?.id ?? sub.metadata?.plan ?? null, periodEnd ? iso(new Date(periodEnd * 1000)) : null, account).run();
 	// Moving up from a smaller plan: things paused to fit it carry on.
 	if (sub.status === "active" || sub.status === "trialing") await db.prepare("UPDATE monitors SET paused_until = NULL WHERE account_id = ? AND paused_until = '9999-12-31T00:00:00Z'").bind(account).run();
 }

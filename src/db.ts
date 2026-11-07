@@ -16,6 +16,9 @@ export interface Env extends WhiteLabelEnv, ApnsEnv {
 	/** Sell to clients: your own Stripe keys, as secrets on the Worker. Payments go straight to your Stripe account. */
 	STRIPE_SECRET_KEY?: string;
 	STRIPE_WEBHOOK_SECRET?: string;
+	/** Optional: "on" makes Stripe the seller through Stripe Managed Payments (its merchant of record service), so
+	 *  Stripe works out, collects and pays sales tax and VAT and handles fraud and disputes. Switch it on in Stripe too. */
+	STRIPE_MANAGED_PAYMENTS?: string;
 	/** Optional Cloudflare Turnstile on sign in, set-up, forgotten password and sign-up (turnstile.ts): both are needed. */
 	TURNSTILE_SITE_KEY?: string;
 	TURNSTILE_SECRET?: string;
