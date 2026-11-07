@@ -85,6 +85,23 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px
 .alert-item pre{white-space:pre-wrap;font:inherit;color:var(--soft);margin:6px 0 0}
 .centre{max-width:460px;margin:48px auto}
 .plans{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.centre.wide{max-width:720px}
+.seg{display:inline-flex;background:#f1f5f9;border-radius:999px;padding:4px;gap:4px;margin:2px 0 14px}
+.seg button{border:0;background:none;font:inherit;font-weight:700;font-size:14px;padding:8px 16px;border-radius:999px;color:var(--soft);cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.seg button[aria-pressed=true]{background:#fff;color:var(--ink);box-shadow:0 1px 3px rgba(15,23,42,.14)}
+.ptiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.ptile{position:relative;display:flex;flex-direction:column;justify-content:flex-start;border:2px solid var(--line);background:#fff;border-radius:18px;padding:18px;text-align:left;font:inherit;color:inherit;cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.ptile:hover{border-color:color-mix(in srgb,var(--brand) 45%,var(--line))}
+.ptile.on{border-color:var(--brand);box-shadow:0 0 0 4px color-mix(in srgb,var(--brand) 14%,transparent)}
+.ptop{display:flex;align-items:center;gap:10px;font-size:18px}
+.radio{width:22px;height:22px;border-radius:50%;border:2px solid var(--line);display:grid;place-items:center;flex:none;color:#fff}
+.ptile.on .radio{background:var(--brand);border-color:var(--brand)}
+.pprice{margin:12px 0 14px;display:flex;align-items:baseline;gap:6px;flex-wrap:wrap}.pprice strong{font-size:32px;line-height:1;font-weight:800}.pprice span{color:var(--soft);font-weight:600}
+.pticks{list-style:none;margin:0;padding:0;display:grid;gap:8px;font-size:15px}.pticks li{display:flex;gap:8px;align-items:flex-start}.pticks svg{color:var(--up);flex:none;margin-top:3px}
+.step{font-size:13px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:var(--soft);margin:24px 0 10px}
+.pay{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;margin-top:14px;color:var(--soft);font-size:14px;font-weight:600}
+.pay-by{display:flex;align-items:center;gap:6px}.pay-by .stripe{display:inline-flex;align-items:center;gap:3px;color:#635bff;font-weight:800}
+.pay-cards{display:flex;gap:6px;flex-wrap:wrap}.pay-card{display:grid;place-items:center;width:50px;height:34px;border:1px solid var(--line);border-radius:6px;background:#fff}
 .foot{color:var(--faint);font-size:13px;text-align:center;margin-top:32px}
 .spark{width:100%;height:40px;margin-top:8px}
 /* Feels like an app on phones: tabs along the bottom, a big status card, pull down to refresh. */
@@ -106,7 +123,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px
  .stats{grid-template-columns:repeat(2,1fr)}
  .card{border-radius:18px}
 }
-@media(max-width:640px){.two{grid-template-columns:1fr}.mon{grid-template-columns:auto 1fr}.mon .acts{grid-column:1/-1}.bars i:nth-child(-n+60){display:none}h1{font-size:26px}}
+@media(max-width:640px){.seg button{padding:8px 11px;font-size:13px}.two{grid-template-columns:1fr}.mon{grid-template-columns:auto 1fr}.mon .acts{grid-column:1/-1}.bars i:nth-child(-n+60){display:none}h1{font-size:26px}}
 `;
 
 // The browser side. Kept as a string; it uses only what every current browser has.
@@ -138,6 +155,9 @@ const ICONS = {
 	down: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
 	open: '<path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/>',
 	card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20"/>',
+	cal: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+	tag: '<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2 12V2h10l8.6 8.6a2 2 0 0 1 0 2.8z"/><circle cx="7" cy="7" r="1.5"/>',
+	lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
 	key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
 	x: '<path d="M18 6 6 18M6 6l12 12"/>',
 	up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
@@ -297,8 +317,30 @@ function resetView() {
 const CHANNEL_WORDS = { email: "email alerts", push: "email and browser alerts", all: "alerts by email, browser, Slack, Teams, Google Chat, Discord and webhook" };
 const planLine = (p) => p.monitors + (p.monitors === 1 ? " website" : " things to watch") + ", checked every " + everyWords(p.minEvery) + ", " + CHANNEL_WORDS[p.channels || "all"] + (p.alertsPerDay ? " (up to " + p.alertsPerDay + " a day)" : "") + (p.pages ? ", " + p.pages + " status page" + (p.pages === 1 ? "" : "s") : "");
 
+const BRANDS = {"visa":["Visa","1A1F71","M9.112 8.262L5.97 15.758H3.92L2.374 9.775c-.094-.368-.175-.503-.461-.658C1.447 8.864.677 8.627 0 8.479l.046-.217h3.3a.904.904 0 01.894.764l.817 4.338 2.018-5.102zm8.033 5.049c.008-1.979-2.736-2.088-2.717-2.972.006-.269.262-.555.822-.628a3.66 3.66 0 011.913.336l.34-1.59a5.207 5.207 0 00-1.814-.333c-1.917 0-3.266 1.02-3.278 2.479-.012 1.079.963 1.68 1.698 2.04.756.367 1.01.603 1.006.931-.005.504-.602.725-1.16.734-.975.015-1.54-.263-1.992-.473l-.351 1.642c.453.208 1.289.39 2.156.398 2.037 0 3.37-1.006 3.377-2.564m5.061 2.447H24l-1.565-7.496h-1.656a.883.883 0 00-.826.55l-2.909 6.946h2.036l.405-1.12h2.488zm-2.163-2.656l1.02-2.815.588 2.815zm-8.16-4.84l-1.603 7.496H8.34l1.605-7.496z"],"mastercard":["Mastercard","EB001B","M11.343 18.031c.058.049.12.098.181.146-1.177.783-2.59 1.238-4.107 1.238C3.32 19.416 0 16.096 0 12c0-4.095 3.32-7.416 7.416-7.416 1.518 0 2.931.456 4.105 1.238-.06.051-.12.098-.165.15C9.6 7.489 8.595 9.688 8.595 12c0 2.311 1.001 4.51 2.748 6.031zm5.241-13.447c-1.52 0-2.931.456-4.105 1.238.06.051.12.098.165.15C14.4 7.489 15.405 9.688 15.405 12c0 2.31-1.001 4.507-2.748 6.031-.058.049-.12.098-.181.146 1.177.783 2.588 1.238 4.107 1.238C20.68 19.416 24 16.096 24 12c0-4.094-3.32-7.416-7.416-7.416zM12 6.174c-.096.075-.189.15-.28.231C10.156 7.764 9.169 9.765 9.169 12c0 2.236.987 4.236 2.551 5.595.09.08.185.158.28.232.096-.074.189-.152.28-.232 1.563-1.359 2.551-3.359 2.551-5.595 0-2.235-.987-4.236-2.551-5.595-.09-.08-.184-.156-.28-.231z"],"americanexpress":["American Express","2E77BC","M16.015 14.378c0-.32-.135-.496-.344-.622-.21-.12-.464-.135-.81-.135h-1.543v2.82h.675v-1.027h.72c.24 0 .39.024.478.125.12.13.104.38.104.55v.35h.66v-.555c-.002-.25-.017-.376-.108-.516-.06-.08-.18-.18-.33-.234l.02-.008c.18-.072.48-.297.48-.747zm-.87.407l-.028-.002c-.09.053-.195.058-.33.058h-.81v-.63h.824c.12 0 .24 0 .33.05.098.048.156.147.15.255 0 .12-.045.215-.134.27zM20.297 15.837H19v.6h1.304c.676 0 1.05-.278 1.05-.884 0-.28-.066-.448-.187-.582-.153-.133-.392-.193-.73-.207l-.376-.015c-.104 0-.18 0-.255-.03-.09-.03-.15-.105-.15-.21 0-.09.017-.166.09-.21.083-.046.177-.066.272-.06h1.23v-.602h-1.35c-.704 0-.958.437-.958.84 0 .9.776.855 1.407.87.104 0 .18.015.225.06.046.03.082.106.082.18 0 .077-.035.15-.08.18-.06.053-.15.07-.277.07zM0 0v10.096L.81 8.22h1.75l.225.464V8.22h2.043l.45 1.02.437-1.013h6.502c.295 0 .56.057.756.236v-.23h1.787v.23c.307-.17.686-.23 1.12-.23h2.606l.24.466v-.466h1.918l.254.465v-.466h1.858v3.948H20.87l-.36-.6v.585h-2.353l-.256-.63h-.583l-.27.614h-1.213c-.48 0-.84-.104-1.08-.24v.24h-2.89v-.884c0-.12-.03-.12-.105-.135h-.105v1.036H6.067v-.48l-.21.48H4.69l-.202-.48v.465H2.235l-.256-.624H1.4l-.256.624H0V24h23.786v-7.108c-.27.135-.613.18-.973.18H21.09v-.255c-.21.165-.57.255-.914.255H14.71v-.9c0-.12-.018-.12-.12-.12h-.075v1.022h-1.8v-1.066c-.298.136-.643.15-.928.136h-.214v.915h-2.18l-.54-.617-.57.6H4.742v-3.93h3.61l.518.602.554-.6h2.412c.28 0 .74.03.942.225v-.24h2.177c.202 0 .644.045.903.225v-.24h3.265v.24c.163-.164.508-.24.803-.24h1.89v.24c.194-.15.464-.24.84-.24h1.176V0H0zM21.156 14.955c.004.005.006.012.01.016.01.01.024.01.032.02l-.042-.035zM23.828 13.082h.065v.555h-.065zM23.865 15.03v-.005c-.03-.025-.046-.048-.075-.07-.15-.153-.39-.215-.764-.225l-.36-.012c-.12 0-.194-.007-.27-.03-.09-.03-.15-.105-.15-.21 0-.09.03-.16.09-.204.076-.045.15-.05.27-.05h1.223v-.588h-1.283c-.69 0-.96.437-.96.84 0 .9.78.855 1.41.87.104 0 .18.015.224.06.046.03.076.106.076.18 0 .07-.034.138-.09.18-.045.056-.136.07-.27.07h-1.288v.605h1.287c.42 0 .734-.118.9-.36h.03c.09-.134.135-.3.135-.523 0-.24-.045-.39-.135-.526zM18.597 14.208v-.583h-2.235V16.458h2.235v-.585h-1.57v-.57h1.533v-.584h-1.532v-.51M13.51 8.787h.685V11.6h-.684zM13.126 9.543l-.007.006c0-.314-.13-.5-.34-.624-.217-.125-.47-.135-.81-.135H10.43v2.82h.674v-1.034h.72c.24 0 .39.03.487.12.122.136.107.378.107.548v.354h.677v-.553c0-.25-.016-.375-.11-.516-.09-.107-.202-.19-.33-.237.172-.07.472-.3.472-.75zm-.855.396h-.015c-.09.054-.195.056-.33.056H11.1v-.623h.825c.12 0 .24.004.33.05.09.04.15.128.15.25s-.047.22-.134.266zM15.92 9.373h.632v-.6h-.644c-.464 0-.804.105-1.02.33-.286.3-.362.69-.362 1.11 0 .512.123.833.36 1.074.232.238.645.31.97.31h.78l.255-.627h1.39l.262.627h1.36v-2.11l1.272 2.11h.95l.002.002V8.786h-.684v1.963l-1.18-1.96h-1.02V11.4L18.11 8.744h-1.004l-.943 2.22h-.3c-.177 0-.362-.03-.468-.134-.125-.15-.186-.36-.186-.662 0-.285.08-.51.194-.63.133-.135.272-.165.516-.165zm1.668-.108l.464 1.118v.002h-.93l.466-1.12zM2.38 10.97l.254.628H4V9.393l.972 2.205h.584l.973-2.202.015 2.202h.69v-2.81H6.118l-.807 1.904-.876-1.905H3.343v2.663L2.205 8.787h-.997L.01 11.597h.72l.26-.626h1.39zm-.688-1.705l.46 1.118-.003.002h-.915l.457-1.12zM11.856 13.62H9.714l-.85.923-.825-.922H5.346v2.82H8l.855-.932.824.93h1.302v-.94h.838c.6 0 1.17-.164 1.17-.945l-.006-.003c0-.78-.598-.93-1.128-.93zM7.67 15.853l-.014-.002H6.02v-.557h1.47v-.574H6.02v-.51H7.7l.733.82-.764.824zm2.642.33l-1.03-1.147 1.03-1.108v2.253zm1.553-1.258h-.885v-.717h.885c.24 0 .42.098.42.344 0 .243-.15.372-.42.372zM9.967 9.373v-.586H7.73V11.6h2.237v-.58H8.4v-.564h1.527V9.88H8.4v-.507"],"applepay":["Apple Pay","000000","M2.15 4.318a42.16 42.16 0 0 0-.454.003c-.15.005-.303.013-.452.04a1.44 1.44 0 0 0-1.06.772c-.07.138-.114.278-.14.43-.028.148-.037.3-.04.45A10.2 10.2 0 0 0 0 6.222v11.557c0 .07.002.138.003.207.004.15.013.303.04.452.027.15.072.291.142.429a1.436 1.436 0 0 0 .63.63c.138.07.278.115.43.142.148.027.3.036.45.04l.208.003h20.194l.207-.003c.15-.004.303-.013.452-.04.15-.027.291-.071.428-.141a1.432 1.432 0 0 0 .631-.631c.07-.138.115-.278.141-.43.027-.148.036-.3.04-.45.002-.07.003-.138.003-.208l.001-.246V6.221c0-.07-.002-.138-.004-.207a2.995 2.995 0 0 0-.04-.452 1.446 1.446 0 0 0-1.2-1.201 3.022 3.022 0 0 0-.452-.04 10.448 10.448 0 0 0-.453-.003zm0 .512h19.942c.066 0 .131.002.197.003.115.004.25.01.375.032.109.02.2.05.287.094a.927.927 0 0 1 .407.407.997.997 0 0 1 .094.288c.022.123.028.258.031.374.002.065.003.13.003.197v11.552c0 .065 0 .13-.003.196-.003.115-.009.25-.032.375a.927.927 0 0 1-.5.693 1.002 1.002 0 0 1-.286.094 2.598 2.598 0 0 1-.373.032l-.2.003H1.906c-.066 0-.133-.002-.196-.003a2.61 2.61 0 0 1-.375-.032c-.109-.02-.2-.05-.288-.094a.918.918 0 0 1-.406-.407 1.006 1.006 0 0 1-.094-.288 2.531 2.531 0 0 1-.032-.373 9.588 9.588 0 0 1-.002-.197V6.224c0-.065 0-.131.002-.197.004-.114.01-.248.032-.375.02-.108.05-.199.094-.287a.925.925 0 0 1 .407-.406 1.03 1.03 0 0 1 .287-.094c.125-.022.26-.029.375-.032.065-.002.131-.002.196-.003zm4.71 3.7c-.3.016-.668.199-.88.456-.191.22-.36.58-.316.918.338.03.675-.169.888-.418.205-.258.345-.603.308-.955zm2.207.42v5.493h.852v-1.877h1.18c1.078 0 1.835-.739 1.835-1.812 0-1.07-.742-1.805-1.808-1.805zm.852.719h.982c.739 0 1.161.396 1.161 1.089 0 .692-.422 1.092-1.164 1.092h-.979zm-3.154.3c-.45.01-.83.28-1.05.28-.235 0-.593-.264-.981-.257a1.446 1.446 0 0 0-1.23.747c-.527.908-.139 2.255.374 2.995.249.366.549.769.944.754.373-.014.52-.242.973-.242.454 0 .586.242.98.235.41-.007.667-.366.915-.733.286-.417.403-.82.41-.841-.007-.008-.79-.308-.797-1.209-.008-.754.615-1.113.644-1.135-.352-.52-.9-.578-1.09-.593a1.123 1.123 0 0 0-.092-.002zm8.204.397c-.99 0-1.606.533-1.652 1.256h.777c.072-.358.369-.586.845-.586.502 0 .803.266.803.711v.309l-1.097.064c-.951.054-1.488.484-1.488 1.184 0 .72.548 1.207 1.332 1.207.526 0 1.032-.281 1.264-.727h.019v.659h.788v-2.76c0-.803-.62-1.317-1.591-1.317zm1.94.072l1.446 4.009c0 .003-.073.24-.073.247-.125.41-.33.571-.711.571-.069 0-.206 0-.267-.015v.666c.06.011.267.019.335.019.83 0 1.226-.312 1.568-1.283l1.5-4.214h-.868l-1.012 3.259h-.015l-1.013-3.26zm-1.167 2.189v.316c0 .521-.45.917-1.024.917-.442 0-.731-.228-.731-.579 0-.342.278-.56.769-.593z"],"googlepay":["Google Pay","5F6368","M3.963 7.235A3.963 3.963 0 00.422 9.419a3.963 3.963 0 000 3.559 3.963 3.963 0 003.541 2.184c1.07 0 1.97-.352 2.627-.957.748-.69 1.18-1.71 1.18-2.916a4.722 4.722 0 00-.07-.806H3.964v1.526h2.14a1.835 1.835 0 01-.79 1.205c-.356.241-.814.379-1.35.379-1.034 0-1.911-.697-2.225-1.636a2.375 2.375 0 010-1.517c.314-.94 1.191-1.636 2.225-1.636a2.152 2.152 0 011.52.594l1.132-1.13a3.808 3.808 0 00-2.652-1.033zm6.501.55v6.9h.886V11.89h1.465c.603 0 1.11-.196 1.522-.588a1.911 1.911 0 00.635-1.464 1.92 1.92 0 00-.635-1.456 2.125 2.125 0 00-1.522-.598zm2.427.85a1.156 1.156 0 01.823.365 1.176 1.176 0 010 1.686 1.171 1.171 0 01-.877.357H11.35V8.635h1.487a1.156 1.156 0 01.054 0zm4.124 1.175c-.842 0-1.477.308-1.907.925l.781.491c.288-.417.68-.626 1.175-.626a1.255 1.255 0 01.856.323 1.009 1.009 0 01.366.785v.202c-.34-.193-.774-.289-1.3-.289-.617 0-1.11.145-1.479.434-.37.288-.554.677-.554 1.165a1.476 1.476 0 00.525 1.156c.35.308.785.463 1.305.463.61 0 1.098-.27 1.465-.81h.038v.655h.848v-2.909c0-.61-.19-1.09-.568-1.44-.38-.35-.896-.525-1.551-.525zm2.263.154l1.946 4.422-1.098 2.38h.915L24 9.963h-.965l-1.368 3.391h-.02l-1.406-3.39zm-2.146 2.368c.494 0 .88.11 1.156.33 0 .372-.147.696-.44.973a1.413 1.413 0 01-.997.414 1.081 1.081 0 01-.69-.232.708.708 0 01-.293-.578c0-.257.12-.47.363-.647.24-.173.54-.26.9-.26Z"],"stripe":["Stripe","635BFF","M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.594-7.305h.003z"]};
+// A payment logo, in the card scheme's own colour.
+const brandMark = (k, size = 20) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("width", size); s.setAttribute("height", size); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("role", "img"); s.setAttribute("aria-label", BRANDS[k][0]); s.innerHTML = '<path fill="#' + BRANDS[k][1] + '" d="' + BRANDS[k][2] + '"/>'; return s; };
+// "Secure payment by Stripe" with the cards and wallets Stripe Checkout takes.
+const payStrip = () => h("div", { class: "pay" }, h("span", { class: "pay-by" }, icon("lock", 16), "Secure payment by", h("span", { class: "stripe" }, brandMark("stripe", 16), "Stripe")),
+	h("span", { class: "pay-cards" }, ["visa", "mastercard", "americanexpress", "applepay", "googlepay"].map((k) => h("span", { class: "pay-card", title: BRANDS[k][0] }, brandMark(k, 30)))));
+let signupPlans = [];
+const TICK_ALERTS = { email: "Email alerts", push: "Email and browser alerts", all: "Alerts on your phone, email and team chat" };
+const planTicks = (p) => [p.monitors === 1 ? "1 website" : p.monitors + " websites, servers or jobs", "Checked every " + everyWords(p.minEvery), TICK_ALERTS[p.channels || "all"] + (p.alertsPerDay ? ", up to " + p.alertsPerDay + " a day" : ""), p.pages ? p.pages + " status page" + (p.pages === 1 ? "" : "s") : null].filter(Boolean);
+// "£5 a month" shows as a big "£5" and a small "a month".
+const priceBits = (p, yearly) => { if (p.free) { const other = ((state && state.plans) || signupPlans).find((x) => !x.free && x.price); const cur = other ? (other.price.match(/^[^\d\s]+/) || [""])[0] : ""; return cur ? [cur + "0", "for ever"] : ["Free", ""]; } const t = (yearly && p.priceYear ? p.priceYear : p.price) || ""; const m = t.match(/^(\S+)\s+(.+)$/); return m ? [m[1], m[2]] : [t, ""]; };
+const planTile = (p, on, yearly, onclick) => { const [big, small] = priceBits(p, yearly); return h(onclick ? "button" : "div", { type: onclick ? "button" : undefined, class: "ptile" + (on ? " on" : ""), "aria-pressed": onclick ? String(on) : undefined, onclick },
+	h("div", { class: "ptop" }, onclick ? h("span", { class: "radio" }, on ? icon("check", 14) : null) : null, h("b", null, p.name)),
+	h("div", { class: "pprice" }, h("strong", null, big), small ? h("span", null, small) : null),
+	h("ul", { class: "pticks" }, planTicks(p).map((t) => h("li", null, icon("check", 16), t)))); };
+// "£5 a month" and "£50 a year" means 2 months free.
+const monthsFree = (plans) => { const n = (t) => parseFloat(String(t || "").replace(/[^\d.]/g, "")); for (const p of plans) { const m = n(p.price), y = n(p.priceYear); if (m > 0 && y > 0 && y < m * 12) { const f = Math.round((m * 12 - y) / m); if (f >= 1 && Math.abs(m * 12 - y - f * m) < 0.01) return f; } } return 0; };
+const periodSwitch = (yearly, set, free) => h("div", { class: "seg", role: "group", "aria-label": "Pay monthly or yearly" },
+	h("button", { type: "button", "aria-pressed": String(!yearly), onclick: () => set(false) }, icon("cal", 16), "Monthly"),
+	h("button", { type: "button", "aria-pressed": String(yearly), onclick: () => set(true) }, icon("tag", 16), free ? "Yearly, " + free + " month" + (free === 1 ? "" : "s") + " free" : "Yearly"));
+
 async function signupView() {
 	const { plans } = await api("/api/plans");
+	signupPlans = plans;
 	if (!plans.length) return centre(h("div", { class: "card" }, h("h1", null, "Sign-up isn't open"), h("p", null, "Please ask whoever sent you here."), h("div", { class: "btns" }, btn("Sign in", "in", () => signinView()))));
 	// A link from a home page can choose the plan: /signup?plan=pro&yearly=1 (by the plan's name or id).
 	const q = new URLSearchParams(location.search);
@@ -306,28 +348,31 @@ async function signupView() {
 	let chosen = (plans.find((p) => p.id === want || p.name.toLowerCase() === want) || plans[0]).id;
 	let yearly = q.get("yearly") === "1";
 	const anyYear = plans.some((p) => p.priceYear);
-	const tiles = h("div", { class: "plans" });
-	const period = h("div", { class: "btns", style: "margin:0 0 12px" });
+	const tiles = h("div", { class: "ptiles" });
+	const period = h("div");
 	const submit = h("button", { class: "btn main", type: "submit" });
+	const after = h("div");
 	const drawTiles = () => {
 		const cur = plans.find((p) => p.id === chosen);
-		tiles.replaceChildren(...plans.map((p) => h("button", { type: "button", class: "tile" + (p.id === chosen ? " on" : ""), onclick: () => { chosen = p.id; drawTiles(); } },
-			h("b", null, icon(p.id === chosen ? "check" : "pulse"), p.name), h("div", { style: "font-size:20px;font-weight:800;margin:6px 0" }, p.free ? "Free" : (yearly && p.priceYear ? p.priceYear : p.price) || ""),
-			h("span", null, planLine(p)), p.blurb ? h("div", { class: "hint" }, p.blurb) : null)));
-		period.replaceChildren(...(anyYear ? [btn("Monthly", yearly ? "card" : "check", () => { yearly = false; drawTiles(); }, yearly ? "small" : "small main"), btn("Yearly", yearly ? "check" : "card", () => { yearly = true; drawTiles(); }, yearly ? "small main" : "small")] : []));
-		submit.replaceChildren(icon(cur.free ? "check" : "card"), cur.free ? "Start free" : "Continue to payment");
+		tiles.replaceChildren(...plans.map((p) => planTile(p, p.id === chosen, yearly, () => { chosen = p.id; drawTiles(); })));
+		period.replaceChildren(anyYear ? periodSwitch(yearly, (y) => { yearly = y; drawTiles(); }, monthsFree(plans)) : "");
+		submit.replaceChildren(icon(cur.free ? "check" : "lock"), cur.free ? "Start free" : "Continue to payment");
+		after.replaceChildren(cur.free ? h("p", { class: "hint" }, "No card needed. You can upgrade any time from your account.") : payStrip());
 	};
 	drawTiles();
 	const name = h("input", { autocomplete: "organization" });
 	const email = h("input", { type: "email", autocomplete: "email", required: true });
 	const pw = h("input", { type: "password", autocomplete: "new-password", minlength: 10, required: true });
 	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(submit, async () => { const r = await api("/api/signup", { plan: chosen, yearly, name: name.value, email: email.value, password: pw.value, tz: tz(), ts: await robot() }); location.href = r.checkout || r.next || "/"; }); } },
-		h("h1", null, "Sign up"), h("p", { class: "lead" }, plans.some((p) => p.free) ? "Choose a plan and make your account. The free plan needs no card." : "Choose a plan, make your account, then pay securely with Stripe."), period, tiles,
-		field("Your name or business", name), field("Email address", email, "You'll sign in with it, and alerts go here."), field("Choose a password", pw, "At least 10 characters."),
-		h("div", { class: "btns" }, submit),
+		h("h1", null, "Sign up"), h("p", { class: "lead" }, plans.some((p) => p.free) ? "Start free with no card, or choose a paid plan and pay securely by card." : "Choose a plan, make your account, then pay securely by card."),
+		h("div", { class: "step" }, "1. Choose your plan"), period, tiles,
+		h("div", { class: "step" }, "2. Make your account"),
+		h("div", { class: "two" }, field("Your name or business", name), field("Email address", email, "You'll sign in with it, and alerts go here.")), field("Choose a password", pw, "At least 10 characters."),
+		h("div", { class: "btns" }, submit), after,
 		h("p", null, "Already have an account? ", h("a", { href: "/signin" }, "Sign in")));
 	const robot = robotCheck(card);
 	centre(card);
+	app.querySelector(".centre").classList.add("wide");
 }
 
 async function verifyView() {
@@ -663,8 +708,9 @@ function planCard(me) {
 		h("p", null, h("b", null, mine ? mine.name : "No plan"), " · ", me.unverified ? "waiting for you to confirm your email" : me.live ? (mine && mine.free ? "free" : "active") : "not active",
 			me.periodEnd && paying ? " · renews or ends on " + new Date(me.periodEnd).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : ""),
 		mine ? h("p", { class: "hint" }, planLine(mine)) : null,
-		!paying && paid.length ? h("div", { class: "plans" }, paid.map((p) => h("div", { class: "tile" }, h("b", null, icon("up"), p.name), h("div", { style: "font-size:20px;font-weight:800;margin:6px 0" }, p.price || ""), h("span", null, planLine(p)),
-			h("div", { class: "btns" }, btn(p.price ? "Pay monthly" : "Choose", "card", pay(p, false), "main small"), p.priceYear ? btn("Pay yearly (" + p.priceYear + ")", "card", pay(p, true), "small") : null)))) : null,
+		!paying && paid.length ? h("div", { class: "ptiles", style: "margin-top:12px;grid-template-columns:repeat(auto-fill,minmax(260px,380px))" }, paid.map((p) => h("div", null, planTile(p, false, false),
+			h("div", { class: "btns" }, btn(p.priceYear ? "Pay monthly" : "Choose " + p.name, "lock", pay(p, false), "main small"), p.priceYear ? btn("Pay yearly (" + p.priceYear + ")", "lock", pay(p, true), "small") : null)))) : null,
+		!paying && paid.length ? payStrip() : null,
 		h("div", { class: "btns" }, me.hasBilling ? btn("Manage billing", "card", (e) => act(e.currentTarget, async () => { const r = await api("/api/billing/portal", {}); location.href = r.portal; }), "main") : null),
 		h("p", { class: "hint" }, "Cards, receipts, changing plan and cancelling are handled securely by Stripe."));
 }
