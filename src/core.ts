@@ -873,3 +873,10 @@ export async function verifyStripe(secret: string, header: string, body: string,
 	return header.split(",").some((p) => p === `v1=${want}`);
 }
 
+
+/** Which channels a plan allows: email always; browser and app alerts unless "email"; the rest only on "all". */
+export const planAllows = (plan: { channels: "email" | "push" | "all" } | null, kind: string) => {
+	const c = plan?.channels ?? "all";
+	if (kind === "email" || c === "all") return true;
+	return (kind === "push" || kind === "apns") && c === "push";
+};

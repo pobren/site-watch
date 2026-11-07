@@ -1,5 +1,12 @@
 # Changes
 
+## 1.5.0: Apps on phones and computers
+
+- **Sign in on an app.** Apps sign in with an email address and password, or by scanning a QR code from **Sign in on your phone** on the Account tab. The code works once, for 5 minutes. Each app gets its own key and works with the same API as the website.
+- **Your apps on the Account tab.** See which apps are signed in and sign any of them out. Sign out everywhere and a new password sign them out too.
+- **App alerts.** Alerts straight to iPhone, iPad and Mac through Apple, with down alerts marked Time Sensitive. Needs four secrets from the Apple Developer account that publishes the app (see App alerts in the README). Plans that allow browser alerts allow app alerts too.
+- **Delete my account.** Clients can delete their own account and everything in it from the Account tab or an app. Any Stripe subscription is cancelled first.
+
 ## 1.4.0: Branded emails
 
 - **Every email is branded.** Alerts, the confirm email and password resets go out as HTML in your name, logo and colour, with a button, and the plain text beside it. Down alerts get a red strip, back up a green one.

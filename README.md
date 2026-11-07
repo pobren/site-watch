@@ -148,6 +148,25 @@ On the **Alerts** tab, **Turn on alerts on this device** makes alerts pop up on 
 
 There's nothing to set up: the first time someone turns alerts on, Site Watch makes its own signing keys and keeps them in the database. Alerts are encrypted for each browser, so the push services (Google, Apple, Mozilla, Microsoft) can't read them.
 
+## Apps on phones and computers
+
+Apps (such as the Site Patrol app for iPhone, iPad and Mac) use the same API as the website. People sign in on the app with their email address and password, or with **Sign in on your phone** on the **Account** tab, which shows a QR code that works once, for 5 minutes. Each app shows on the Account tab, where it can be signed out. **Sign out everywhere** and a new password sign apps out too.
+
+The Account tab also has **Delete my account** for clients, which deletes everything in the account and cancels any Stripe subscription.
+
+### App alerts
+
+Alerts in an app go through Apple's push service, signed with the key of the Apple Developer account that publishes the app. Add four secrets to the Worker:
+
+| Secret | What it is |
+| --- | --- |
+| `APNS_KEY` | The text of the `.p8` key file (Certificates, Identifiers & Profiles, Keys, with Apple Push Notifications service on) |
+| `APNS_KEY_ID` | The key's 10 character Key ID |
+| `APNS_TEAM_ID` | Your 10 character Team ID |
+| `APNS_TOPIC` | The app's bundle ID |
+
+Down alerts are Time Sensitive, so they can come through Focus if the person allows it. With `APNS_TEAM_ID` and `APNS_TOPIC` set, Site Watch also serves `/.well-known/apple-app-site-association`, so a phone's camera opens the app from the QR code.
+
 ## Lots of websites
 
 On its own, Site Watch checks about 40 things a minute, which is plenty for one business. For thousands, add a Cloudflare Queue (Workers Paid plan) and the cron hands checks out in batches:
