@@ -134,6 +134,8 @@ It switches on once both are there. Remove either one to switch it off.
 4. In Site Watch, open **Admin**, add your plans with their Stripe price IDs, and tick **Open sign-up to clients**. Your sign-up page is `/signup`.
 5. In Stripe's settings, switch on the customer portal and email receipts.
 
+**Let Stripe handle tax (optional).** With [Stripe Managed Payments](https://docs.stripe.com/payments/managed-payments), Stripe sells your plans as merchant of record: it works out, collects and pays sales tax and VAT around the world and handles fraud and disputes, for an extra fee on each payment. Switch it on in Stripe, give each product a tax code labelled *Eligible for Managed Payments*, then add a variable `STRIPE_MANAGED_PAYMENTS` set to `on` to the Worker. Only new subscriptions use it.
+
 <img src="docs/admin.png" alt="The Admin tab: sending email, branding, selling to clients, plans and clients" width="100%">
 
 ### A free plan
