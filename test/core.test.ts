@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import {
-	alertFor, certAlert, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
+	alertFor, certAlert, CHECK_EVERY, FAST_EVERY, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
 	pageOutcome, payloadFor, rawEmail, rdapExpiry, reminderDue, remindersPassed, renewalAlert, step, statusOf, uptime, verifyStripe, webhookHeaders, type MailIo, type State,
 } from "../src/core.ts";
 
@@ -148,6 +148,14 @@ test("alert words use the brand and time zone", () => {
 	assert.equal(a.subject, "Down: example.com");
 	assert.match(a.text, /Open Acme Monitor: https:\/\/w\.example\.com\//);
 	assert.match(a.text, /5 minutes apart/);
+});
+
+test("30 second checks say so in the alert", () => {
+	const down = { kind: "down" as const, why: "it timed out", since: "2026-11-04T10:00:00Z" };
+	const m = { kind: "website" as const, name: null, url: "https://example.com/", host: null, port: null };
+	assert.match(alertFor({ ...m, every: 0.5 }, down, "UTC", "https://w/").text, /30 seconds apart/);
+	assert.match(alertFor({ ...m, every: 1 }, down, "UTC", "https://w/").text, /a minute apart/);
+	assert.ok(CHECK_EVERY.includes(FAST_EVERY) && FAST_EVERY < 1);
 });
 
 test("raw email headers", () => {

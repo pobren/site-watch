@@ -56,7 +56,7 @@ export async function livePlans(db: D1Database, paid = true): Promise<PlanRow[]>
 
 export const publicPlan = (p: PlanRow) => ({
 	id: p.id, name: p.name, blurb: p.blurb, price: p.price_label, priceYear: p.stripe_price_year ? p.price_label_year : null, free: p.free === 1,
-	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all", phoneAlerts: p.phone_alerts ?? 0,
+	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all", phoneAlerts: p.phone_alerts ?? 0, fast: p.fast ?? 0,
 });
 
 /** The free plan clients drop back to when a paid subscription ends, if there is one. */
@@ -65,7 +65,10 @@ export const freePlan = async (db: D1Database) => (await db.prepare("SELECT * FR
 /** Fits an account's things to a smaller plan: the oldest ones carry on, the rest are paused (kept, not checked). */
 export async function fitToPlan(db: D1Database, accountId: string, plan: PlanRow): Promise<void> {
 	await db.batch([
-		db.prepare("UPDATE monitors SET every = ? WHERE account_id = ? AND kind != 'heartbeat' AND every < ?").bind(plan.min_every, accountId, plan.min_every),
+		// 30 second checks: the oldest ones the plan allows carry on, the rest go to the plan's fastest.
+		db.prepare("UPDATE monitors SET every = ? WHERE account_id = ? AND kind != 'heartbeat' AND every < 1 AND id NOT IN (SELECT id FROM monitors WHERE account_id = ? AND kind != 'heartbeat' AND every < 1 ORDER BY created_at, id LIMIT ?)")
+			.bind(plan.min_every, accountId, accountId, plan.fast ?? 0),
+		db.prepare("UPDATE monitors SET every = ? WHERE account_id = ? AND kind != 'heartbeat' AND every >= 1 AND every < ?").bind(plan.min_every, accountId, plan.min_every),
 		db.prepare("UPDATE monitors SET paused_until = '9999-12-31T00:00:00Z' WHERE account_id = ? AND id NOT IN (SELECT id FROM monitors WHERE account_id = ? ORDER BY created_at, id LIMIT ?)").bind(accountId, accountId, plan.monitors),
 	]);
 }

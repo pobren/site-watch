@@ -7,8 +7,10 @@ export type Proto = "smtp" | "imap" | "pop3";
 
 /** Failed checks in a row before we call something down, so one slow answer doesn't send an alert. */
 export const DOWN_AFTER = 2;
-/** How often a website, mail server or port can be checked, in minutes. */
-export const CHECK_EVERY = [1, 5, 10, 15, 30, 60];
+/** How often a website, mail server or port can be checked, in minutes. 0.5 is every 30 seconds (1.8.0): the minute's
+ *  run checks it and a delayed queue message checks it again half a minute later. Plans say how many may use it. */
+export const FAST_EVERY = 0.5;
+export const CHECK_EVERY = [FAST_EVERY, 1, 5, 10, 15, 30, 60];
 export const DEFAULT_EVERY = 5;
 /** How often a heartbeat is expected, in minutes. */
 export const HEARTBEAT_EVERY = [5, 15, 30, 60, 360, 1440, 10080];
@@ -600,7 +602,7 @@ function alertText(m: MonitorLike & { every: number }, e: Event, tz: string, lin
 	const label = labelOf(m);
 	const what = m.kind === "website" ? m.url : m.kind === "heartbeat" ? `the "${label}" heartbeat` : `${m.host} port ${m.port}`;
 	const end = `Open ${app}: ${link}`;
-	const apart = m.every === 1 ? "a minute apart" : `${m.every} minutes apart`;
+	const apart = m.every < 1 ? `${Math.round(m.every * 60)} seconds apart` : m.every === 1 ? "a minute apart" : `${m.every} minutes apart`;
 	switch (e.kind) {
 		case "down":
 			return {

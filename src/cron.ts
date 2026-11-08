@@ -1,4 +1,6 @@
-// The schedule: every minute Cloudflare runs this, and it checks whatever is due, a few at a time. Once a day each
+// The schedule: every minute Cloudflare runs this, and it checks whatever is due, a few at a time. Things on 30 second
+// checks are looked at every run, and again half a minute later through a delayed queue message (without a queue, every
+// minute). Once a day each
 // website's certificate and domain renewal date are looked up too, with reminders before either runs out.
 
 import { deliver } from "./alerts.ts";
@@ -23,6 +25,8 @@ const DAILY_QUEUED_PER_RUN = 200;
 const LATE_MS = 60_000;
 /** Heartbeats are looked at every 5 minutes, whatever their interval. */
 const HEARTBEAT_LOOK = 5;
+/** 30 second checks: the second look each minute is a queue message held back this long. */
+const HALF_MINUTE = 30;
 /** Alerts kept in the list. */
 const KEEP_ALERTS = 500;
 
@@ -93,12 +97,12 @@ const LIVE = LIVE_SQL;
 const chunk = <T>(xs: T[], n: number) => Array.from({ length: Math.ceil(xs.length / n) }, (_, i) => xs.slice(i * n, i * n + n));
 
 /** Hands due checks to the queue. Each is marked as looked at first, so the next run doesn't send it again. */
-async function enqueue(env: Env, ids: string[], batch: Omit<CheckBatch, "ids">, mark: string): Promise<void> {
+async function enqueue(env: Env, ids: string[], batch: Omit<CheckBatch, "ids">, mark: string | null, delaySeconds = 0): Promise<void> {
 	const db = env.DB;
-	for (const part of chunk(ids, 90)) {
+	if (mark) for (const part of chunk(ids, 90)) {
 		await db.prepare(`UPDATE monitors SET ${mark} = ? WHERE id IN (${part.map(() => "?").join(",")})`).bind(iso(new Date(batch.at)), ...part).run();
 	}
-	for (const group of chunk(chunk(ids, PER_MESSAGE), 100)) await env.CHECKS!.sendBatch(group.map((g) => ({ body: { ...batch, ids: g } })));
+	for (const group of chunk(chunk(ids, PER_MESSAGE), 100)) await env.CHECKS!.sendBatch(group.map((g) => ({ body: { ...batch, ids: g }, ...(delaySeconds ? { delaySeconds } : {}) })));
 }
 
 /** The queue's side: checks one message's monitors. Called by Cloudflare with a few messages at a time. */
@@ -141,15 +145,18 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 	};
 
 	const queued = !!env.CHECKS;
+	// 30 second checks (every below 1) are due every run; with a queue they get a second look half a minute later.
 	const { results: due } = await db.prepare(
-		`SELECT ${queued ? "id" : "*"} FROM monitors
+		`SELECT ${queued ? "id, every, kind" : "*"} FROM monitors
 		 WHERE ${LIVE} AND (paused_until IS NULL OR paused_until <= ?1)
-		   AND (checked_at IS NULL OR checked_at <= strftime('%Y-%m-%dT%H:%M:%SZ', ?1, '-' || (CASE kind WHEN 'heartbeat' THEN ${HEARTBEAT_LOOK} ELSE every END) || ' minutes', '+20 seconds'))
+		   AND (checked_at IS NULL OR (kind != 'heartbeat' AND every < 1) OR checked_at <= strftime('%Y-%m-%dT%H:%M:%SZ', ?1, '-' || (CASE kind WHEN 'heartbeat' THEN ${HEARTBEAT_LOOK} ELSE every END) || ' minutes', '+20 seconds'))
 		 ORDER BY checked_at IS NOT NULL, checked_at LIMIT ${queued ? QUEUED_PER_RUN : PER_RUN}`,
 	).bind(at).all<MonitorRow>();
 	if (queued) {
 		// Everything due goes to the queue, a batch to a message; Cloudflare runs as many at once as it needs.
 		await enqueue(env, due.map((r) => r.id), { late, at: now.getTime() }, "checked_at");
+		const fast = due.filter((r) => r.kind !== "heartbeat" && r.every < 1).map((r) => r.id);
+		if (fast.length) await enqueue(env, fast, { late, at: now.getTime() + HALF_MINUTE * 1000 }, null, HALF_MINUTE);
 		const { results: daily } = await db.prepare(
 			`SELECT id FROM monitors WHERE ${LIVE} AND kind = 'website' AND extras = 1 AND (daily_at IS NULL OR daily_at <= ?) ORDER BY daily_at IS NOT NULL, daily_at LIMIT ${DAILY_QUEUED_PER_RUN}`,
 		).bind(minutesAgo(now, 24 * 60)).all<{ id: string }>();
