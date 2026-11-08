@@ -42,7 +42,7 @@ const problem = (status: number, error: string, headers: Record<string, string> 
 export function apiMonitor(r: MonitorRow, origin: string, now = new Date()) {
 	const m = shape(r, origin, now);
 	return {
-		id: m.id, kind: m.kind, name: m.name, label: m.label, url: m.url, host: m.host, port: m.port, every: m.every,
+		id: m.id, kind: m.kind, name: m.name, label: m.label, url: m.url, host: m.host, port: m.port, every: m.every, fast: m.fast,
 		status: m.status, why: m.why, downSince: m.since, responseMs: m.ms, uptime: { "30d": m.uptime30, "90d": m.uptime90 },
 		checkedAt: m.checkedAt, pausedUntil: m.pausedUntil, pingUrl: m.pingUrl, lastPing: m.lastPing,
 		certificate: m.cert ? { expires: m.cert.expires, daysLeft: m.cert.daysLeft, issuer: m.cert.issuer, renewsItself: m.cert.auto } : null,

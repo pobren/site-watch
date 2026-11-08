@@ -9,7 +9,7 @@ import { currentAccount } from "./auth.ts";
 import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
-	CHANNEL_NAMES, CHECK_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
+	CHANNEL_NAMES, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
 	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
 import { DEFAULT_BRAND, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
@@ -33,7 +33,9 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 	const cert = r.cert ? JSON.parse(r.cert) : null;
 	const reg = r.reg ? JSON.parse(r.reg) : null;
 	return {
-		id: r.id, kind: r.kind, label: labelOf(r), name: r.name, url: r.url, host: r.host, port: r.port, rules: rulesOf(r.rules), every: r.every, extras: r.extras === 1,
+		id: r.id, kind: r.kind, label: labelOf(r), name: r.name, url: r.url, host: r.host, port: r.port, rules: rulesOf(r.rules),
+		// 30 second checks are stored as every 0.5 but shown as every 1 with fast set, so apps that expect whole minutes carry on.
+		every: r.every < 1 ? 1 : r.every, fast: r.every < 1, extras: r.extras === 1,
 		status: statusOf(s, !!r.checked_at, paused), why: s.blocked ?? s.why ?? s.certProblem, since: isDown(s) ? s.since : null, ms: s.ms,
 		uptime30: uptime(s, now, 30), uptime90: uptime(s, now, 90), bars: dailyBars(s, now).map((b) => b.up), responses: responseTimes(s),
 		outages: s.outages.slice(-10).reverse(), checkedAt: r.checked_at, pausedUntil: paused ? r.paused_until : null,
@@ -44,13 +46,24 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 }
 
 
-interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean; branding: boolean; phoneAlerts: number | null }
+interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean; branding: boolean; phoneAlerts: number | null; fast: number | null }
 
 /** What an account may have. The owner has no limits here (the licence covers that, on trust); clients have their plan's. */
 async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
-	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true, branding: true, phoneAlerts: null };
+	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true, branding: true, phoneAlerts: null, fast: null };
 	const plan = await planById(db, a.plan);
-	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1, branding: !!plan && plan.free !== 1, phoneAlerts: plan && plan.free !== 1 && (plan.channels ?? "all") === "all" ? plan.phone_alerts ?? 0 : 0 };
+	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1, branding: !!plan && plan.free !== 1, phoneAlerts: plan && plan.free !== 1 && (plan.channels ?? "all") === "all" ? plan.phone_alerts ?? 0 : 0, fast: plan && plan.free !== 1 ? plan.fast ?? 0 : 0 };
+}
+
+/** How often this account's things can be checked: the plan's fastest and slower, plus 30 seconds if the plan has any. */
+const everyChoices = (l: Limits) => CHECK_EVERY.filter((n) => n >= l.minEvery || (n === FAST_EVERY && l.fast !== 0));
+
+/** Whether one more thing can go to 30 second checks (`except`: the one being edited, already counted). */
+async function fastRoom(db: D1Database, accountId: string, l: Limits, except = ""): Promise<string | null> {
+	if (l.fast === null) return null;
+	const n = await db.prepare("SELECT COUNT(*) AS n FROM monitors WHERE account_id = ? AND kind != 'heartbeat' AND every < 1 AND id != ?").bind(accountId, except).first<{ n: number }>();
+	if ((n?.n ?? 0) < l.fast) return null;
+	return l.fast ? `Your plan checks up to ${l.fast === 1 ? "1 thing" : `${l.fast} things`} every 30 seconds. Move one to every minute first, or upgrade on the Account tab.` : "30 second checks aren't on your plan. Upgrade on the Account tab to add them.";
 }
 
 const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, ...PHONE_NAMES, push: "Browser alerts", apns: "App alerts" };
@@ -81,7 +94,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		notices: notices.results,
 		alerts: alerts.results,
 		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
-		choices: { every: CHECK_EVERY.filter((n) => n >= limits.minEvery), heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS },
+		choices: { every: everyChoices(limits).filter((n) => n >= 1), fast: limits.fast, heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS },
 		limits,
 		brand: inst.brand,
 		apiKeys: await listKeys(db, me.id),
@@ -125,15 +138,15 @@ async function body(request: Request): Promise<Record<string, unknown>> {
 }
 
 /** A new monitor from the Add form. */
-function newMonitor(b: Record<string, unknown>, accountId: string, minEvery: number): MonitorRow | { error: string } {
+function newMonitor(b: Record<string, unknown>, accountId: string, choices: number[]): MonitorRow | { error: string } {
 	const kind = b.kind as Kind;
 	const now = iso(new Date());
 	const row: MonitorRow = {
 		id: newId(8), account_id: accountId, kind, name: cleanName(b.name), url: null, host: null, port: null, rules: null, every: DEFAULT_EVERY, token: null, state: null,
 		extras: b.extras === false ? 0 : 1, cert: null, reg: null, cert_sent: "", reg_sent: "", daily_at: null, paused_until: null, last_ping: null, checked_at: null, created_at: now,
 	};
-	const every = Number(b.every);
-	const pick = (n: number) => (CHECK_EVERY.includes(n) && n >= minEvery ? n : Math.max(DEFAULT_EVERY, minEvery));
+	const every = b.fast === true ? FAST_EVERY : Number(b.every);
+	const pick = (n: number) => (choices.includes(n) ? n : Math.max(DEFAULT_EVERY, choices.find((x) => x >= 1) ?? DEFAULT_EVERY));
 	if (kind === "website") {
 		const url = cleanUrl(b.url);
 		if (!url) return { error: "Please enter the web address to watch, such as https://example.com/." };
@@ -228,8 +241,12 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 	// -- Monitors --
 	if (path === "/api/monitors" && method === "POST") {
 		if (!isLive(me) && me.status !== "unverified") return bad("Your plan isn't active, so checks are paused. Choose a plan on the Account tab first.", 402);
-		const row = newMonitor(b, me.id, limits.minEvery);
+		const row = newMonitor(b, me.id, everyChoices(limits));
 		if ("error" in row) return bad(row.error);
+		if (row.kind !== "heartbeat" && row.every < 1) {
+			const full = await fastRoom(db, me.id, limits);
+			if (full) return bad(full, 403);
+		}
 		if (limits.monitors !== null) {
 			const n = await db.prepare("SELECT COUNT(*) AS n FROM monitors WHERE account_id = ?").bind(me.id).first<{ n: number }>();
 			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan watches up to ${limits.monitors === 1 ? "1 thing" : `${limits.monitors} things`}. Remove one first, or upgrade on the Account tab.`, 403);
@@ -274,9 +291,13 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		const name = "name" in b ? cleanName(b.name) : row.name;
 		if (row.kind === "heartbeat" && !name) return bad("Please give the heartbeat a name.");
 		let every = row.every;
-		if ("every" in b) {
-			const n = Number(b.every);
-			if (!(row.kind === "heartbeat" ? HEARTBEAT_EVERY : CHECK_EVERY.filter((x) => x >= limits.minEvery)).includes(n)) return bad("Please choose how often.");
+		if ("every" in b || b.fast === true) {
+			const n = b.fast === true ? FAST_EVERY : Number(b.every);
+			if (!(row.kind === "heartbeat" ? HEARTBEAT_EVERY : everyChoices(limits)).includes(n)) return bad("Please choose how often.");
+			if (row.kind !== "heartbeat" && n < 1 && row.every >= 1) {
+				const full = await fastRoom(db, me.id, limits, row.id);
+				if (full) return bad(full, 403);
+			}
 			every = n;
 		}
 		let rules = row.rules;
@@ -610,7 +631,7 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const num = (x: unknown, lo: number, hi: number) => (Number.isInteger(Number(x)) && Number(x) >= lo && Number(x) <= hi ? Number(x) : null);
 		const monitors = num(b.monitors, 1, 10_000);
 		const pages = num(b.pages, 0, 100);
-		const minEvery = CHECK_EVERY.includes(Number(b.minEvery)) ? Number(b.minEvery) : null;
+		const minEvery = CHECK_EVERY.includes(Number(b.minEvery)) && Number(b.minEvery) >= 1 ? Number(b.minEvery) : null;
 		if (monitors === null || pages === null || minEvery === null) return bad("Please fill in what the plan includes: things to watch, how often and status pages.");
 		const priceId = (x: unknown) => (typeof x === "string" && x.trim() ? x.trim() : null);
 		const free = b.free === true;
@@ -622,11 +643,13 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const channels = ["email", "push", "all"].includes(String(b.channels)) ? String(b.channels) : "all";
 		const phoneAlerts = b.phoneAlerts === "" || b.phoneAlerts === undefined || b.phoneAlerts === null ? 0 : num(b.phoneAlerts, 0, 10_000);
 		if (phoneAlerts === null) return bad("Please choose between 0 and 10,000 text and WhatsApp alerts a month.");
+		const fast = b.fast === "" || b.fast === undefined || b.fast === null ? 0 : num(b.fast, 0, 10_000);
+		if (fast === null) return bad("Please choose how many things can be checked every 30 seconds, from 0 up.");
 		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
-			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts];
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors)];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);

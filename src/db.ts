@@ -39,6 +39,7 @@ export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 }
 
 /** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */
+/** `at`: when the checks are meant to run (half a minute ahead for the second look at 30 second checks). */
 export interface CheckBatch { ids: string[]; daily?: boolean; late?: boolean; at: number }
 
 export interface MonitorRow {
@@ -122,6 +123,8 @@ export interface PlanRow {
 	price_label_year: string | null;
 	/** 1.7.0: text message and WhatsApp alerts included each month (0: none). */
 	phone_alerts?: number;
+	/** 1.8.0: how many things may be checked every 30 seconds (0: none). */
+	fast?: number;
 }
 
 const SCHEMA = [
@@ -203,8 +206,9 @@ const COLUMNS = [
 	"ALTER TABLE pages ADD COLUMN logo TEXT",
 	"ALTER TABLE pages ADD COLUMN support TEXT",
 	"ALTER TABLE pages ADD COLUMN colour TEXT",
+	"ALTER TABLE plans ADD COLUMN fast INTEGER NOT NULL DEFAULT 0",
 ];
-const SCHEMA_VERSION = "8";
+const SCHEMA_VERSION = "9";
 
 let ready: Promise<void> | null = null;
 

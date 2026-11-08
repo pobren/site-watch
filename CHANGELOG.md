@@ -1,5 +1,13 @@
 # Changes
 
+## 1.8.0: Checks every 30 seconds
+
+- **Every 30 seconds** is a new choice for websites, mail servers and ports. The minute's run checks them, and a queue message held back half a minute checks them again. Without a queue (CHECKS) they're checked every minute.
+- **Plans say how many** can use it: "Checked every 30 seconds" on the Admin tab's plan form (none unless set). The owner has no limit. Plan tiles show "Every 30 seconds for 10 of them".
+- Moving to a plan with fewer keeps the oldest on 30 seconds and moves the rest to the plan's fastest.
+- The API and apps still see `every` in whole minutes: 30 second checks show as `every: 1` with `fast: true`. Send `fast: true` (or `every: 0.5`) to turn them on.
+- Alerts say the two tries were "30 seconds apart".
+
 ## 1.7.1: Status page notices and branding
 
 - Status page notices show a Live or Resolved tag and their kind, when they started and, once over, when they were resolved and how long they lasted.
