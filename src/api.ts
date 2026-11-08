@@ -394,6 +394,17 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		// The page's own logo: left out keeps what's there, empty removes it.
 		const logo = b.logo === undefined ? undefined : cleanLogo(b.logo);
 		if (logo && typeof logo === "object") return bad(logo.error);
+		// Who visitors contact (the customer, never us) and the page's colour: left out keeps what's there.
+		let support: string | null | undefined = undefined;
+		if (typeof b.support === "string") {
+			const t = b.support.trim();
+			if (!t) support = null;
+			else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t) && t.length <= 200) support = t;
+			else if (/^https:\/\/[^\s]+$/.test(t) && t.length <= 300) support = t;
+			else return bad("Please give an email address, or a web address starting with https://, for visitors to contact.");
+		}
+		const colour = b.colour === undefined ? undefined : b.colour === "" || b.colour === null ? null : cleanColour(b.colour);
+		if (colour === null && b.colour) return bad("Please pick a colour.");
 		// With Cloudflare for SaaS, own domains go through the wizard (/domain below), so this keeps what's there.
 		const managed = saasReady(env);
 		let host = typeof b.host === "string" && b.host.trim() ? cleanHost(b.host) : null;
@@ -413,7 +424,9 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		if (id) {
 			await db.prepare("UPDATE pages SET slug = ?, title = ?, intro = ?, host = ?, monitors = ? WHERE id = ?").bind(slug, title, intro, host, JSON.stringify(ids), id).run();
 			if (logo !== undefined) await db.prepare("UPDATE pages SET logo = ? WHERE id = ?").bind(logo, id).run();
-		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, iso(new Date())).run();
+			if (support !== undefined) await db.prepare("UPDATE pages SET support = ? WHERE id = ?").bind(support, id).run();
+			if (colour !== undefined) await db.prepare("UPDATE pages SET colour = ? WHERE id = ?").bind(colour, id).run();
+		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, support, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, support ?? null, colour ?? null, iso(new Date())).run();
 		return reply({ ok: true });
 	}
 	// A status page on the customer's own domain: the set-up wizard adds it, checks it, and removes it.

@@ -183,6 +183,8 @@ const COLUMNS = [
 	"ALTER TABLE accounts ADD COLUMN live_expires TEXT",
 	"ALTER TABLE pages ADD COLUMN cf_host_id TEXT",
 	"ALTER TABLE pages ADD COLUMN logo TEXT",
+	"ALTER TABLE pages ADD COLUMN support TEXT",
+	"ALTER TABLE pages ADD COLUMN colour TEXT",
 ];
 const SCHEMA_VERSION = "7";
 
