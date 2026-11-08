@@ -27,6 +27,9 @@ export interface Env extends WhiteLabelEnv, ApnsEnv {
 	CHECKS?: Queue<CheckBatch>;
 	/** Optional static files (Workers assets): a home page and other pages shown to people who aren't signed in. */
 	ASSETS?: Fetcher;
+	/** Gives status pages their own name on this domain (name.example.com) instead of /status/name. Needs a
+	 * wildcard DNS record and a *.domain/* Worker route; /status/name keeps working too. */
+	PAGE_DOMAIN?: string;
 }
 
 /** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */

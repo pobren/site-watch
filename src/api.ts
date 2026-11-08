@@ -16,6 +16,12 @@ import { DEFAULT_BRAND, install, isLive, newId, planById, setMeta, type AccountR
 import { cleanSub, vapidKeys } from "./push.ts";
 import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
+import { nameProblem, tidyName } from "./names.ts";
+
+/** Where a status page lives: name.PAGE_DOMAIN when the install has one, otherwise /status/name. */
+export function pageAddress(env: Env, origin: string, slug: string): string {
+	return env.PAGE_DOMAIN ? `https://${slug}.${env.PAGE_DOMAIN.toLowerCase()}` : `${origin}/status/${slug}`;
+}
 
 const bad = (error: string, status = 400) => json({ error }, status);
 
@@ -65,7 +71,8 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "push" || c.kind === "apns" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
-		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: `${origin}/status/${p.slug}` })),
+		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug) })),
+		pageDomain: env.PAGE_DOMAIN?.toLowerCase() ?? null,
 		notices: notices.results,
 		alerts: alerts.results,
 		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
@@ -364,11 +371,21 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 	}
 
 	// -- Status pages --
+	// Checked as people type a name: allowed, and free (their own page's current name counts as free).
+	if (path === "/api/pages/name" && method === "GET") {
+		const name = tidyName(url.searchParams.get("name"));
+		const id = url.searchParams.get("id") ?? "";
+		const problem = nameProblem(name);
+		if (problem) return Response.json({ ok: false, name, reason: problem, address: pageAddress(env, url.origin, name || "name") });
+		const taken = await db.prepare("SELECT 1 FROM pages WHERE slug = ? AND id != ?").bind(name, id).first();
+		return Response.json(taken ? { ok: false, name, reason: "Someone already has that name. Please try another.", address: pageAddress(env, url.origin, name) } : { ok: true, name, address: pageAddress(env, url.origin, name) });
+	}
 	if (path === "/api/pages" && method === "POST") {
 		const title = cleanName(b.title, 80);
 		if (!title) return bad("Please give the status page a title, such as Example Ltd status.");
-		const slug = cleanSlug(b.slug || title);
-		if (!slug) return bad("Please choose an address for the page, using letters, numbers and dashes.");
+		const slug = tidyName(b.slug || title);
+		const problem = nameProblem(slug);
+		if (problem) return bad(problem);
 		const intro = typeof b.intro === "string" ? b.intro.trim().slice(0, 500) || null : null;
 		const host = typeof b.host === "string" && b.host.trim() ? cleanHost(b.host) : null;
 		if (typeof b.host === "string" && b.host.trim() && !host) return bad("Please enter just the address, such as status.example.com.");
@@ -381,7 +398,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if ((n?.n ?? 0) >= limits.pages) return bad(limits.pages ? `Your plan includes ${limits.pages} status page${limits.pages === 1 ? "" : "s"}.` : "Your plan doesn't include status pages.", 403);
 		}
 		const taken = await db.prepare("SELECT id FROM pages WHERE slug = ? AND id != ?").bind(slug, id ?? "").first();
-		if (taken) return bad("Another status page uses that address. Please choose another.", 409);
+		if (taken) return bad("Someone already has that name. Please try another.", 409);
 		if (host && (await db.prepare("SELECT id FROM pages WHERE host = ? AND id != ?").bind(host, id ?? "").first())) return bad("Another status page uses that address.", 409);
 		if (id) await db.prepare("UPDATE pages SET slug = ?, title = ?, intro = ?, host = ?, monitors = ? WHERE id = ?").bind(slug, title, intro, host, JSON.stringify(ids), id).run();
 		else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), iso(new Date())).run();

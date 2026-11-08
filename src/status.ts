@@ -11,10 +11,15 @@ export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", 
 
 const WORDS: Record<Shown, string> = { up: "Working", down: "Down", degraded: "Problems", maintenance: "Maintenance", unknown: "Checking" };
 
-export async function findPage(db: D1Database, path: string, host: string): Promise<PageRow | null> {
+export async function findPage(db: D1Database, path: string, host: string, pageDomain?: string): Promise<PageRow | null> {
 	const m = /^\/status\/([a-z0-9-]{2,40})\/?$/.exec(path);
 	if (m) return db.prepare("SELECT * FROM pages WHERE slug = ?").bind(m[1]).first<PageRow>();
-	if (path === "/" || path === "") return db.prepare("SELECT * FROM pages WHERE host = ?").bind(host.toLowerCase()).first<PageRow>();
+	if (path === "/" || path === "") {
+		const h = host.toLowerCase();
+		const sub = pageDomain && h.endsWith(`.${pageDomain}`) ? h.slice(0, -pageDomain.length - 1) : null;
+		if (sub && /^[a-z0-9-]{2,40}$/.test(sub)) return db.prepare("SELECT * FROM pages WHERE slug = ?").bind(sub).first<PageRow>();
+		return db.prepare("SELECT * FROM pages WHERE host = ?").bind(h).first<PageRow>();
+	}
 	return null;
 }
 
