@@ -30,6 +30,11 @@ export interface Env extends WhiteLabelEnv, ApnsEnv {
 	/** Gives status pages their own name on this domain (name.example.com) instead of /status/name. Needs a
 	 * wildcard DNS record and a *.domain/* Worker route; /status/name keeps working too. */
 	PAGE_DOMAIN?: string;
+	/** Cloudflare for SaaS, for status pages on customers' own domains (domains.ts). */
+	CF_ZONE_ID?: string;
+	CF_API_TOKEN?: string;
+	/** What customers point their CNAME at, such as domains.example.com (the zone's fallback origin). */
+	DOMAIN_TARGET?: string;
 }
 
 /** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */
@@ -176,6 +181,7 @@ const COLUMNS = [
 	"ALTER TABLE accounts ADD COLUMN live_token TEXT",
 	"ALTER TABLE accounts ADD COLUMN live_alerts INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE accounts ADD COLUMN live_expires TEXT",
+	"ALTER TABLE pages ADD COLUMN cf_host_id TEXT",
 ];
 const SCHEMA_VERSION = "6";
 
