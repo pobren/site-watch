@@ -200,8 +200,11 @@ const COLUMNS = [
 	"ALTER TABLE plans ADD COLUMN phone_alerts INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE accounts ADD COLUMN phone_credits INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE accounts ADD COLUMN phone_credits_until TEXT",
+	"ALTER TABLE pages ADD COLUMN logo TEXT",
+	"ALTER TABLE pages ADD COLUMN support TEXT",
+	"ALTER TABLE pages ADD COLUMN colour TEXT",
 ];
-const SCHEMA_VERSION = "7";
+const SCHEMA_VERSION = "8";
 
 let ready: Promise<void> | null = null;
 
@@ -273,3 +276,10 @@ export const LIVE_STATUSES = ["active", "trialing", "free"];
 export const LIVE_SQL = `account_id IN (SELECT id FROM accounts WHERE role = 'owner' OR status IN ('active', 'trialing', 'free'))`;
 
 export const planById = (db: D1Database, id: string | null) => (id ? db.prepare("SELECT * FROM plans WHERE id = ?").bind(id).first<PlanRow>() : Promise.resolve(null));
+
+/** Pro features (own domain, and a status page's logo, colour and contact): the owner, and any plan that isn't free. */
+export async function hasPro(db: D1Database, a: Pick<AccountRow, "role" | "plan">): Promise<boolean> {
+	if (a.role === "owner") return true;
+	const plan = await planById(db, a.plan);
+	return !!plan && plan.free !== 1;
+}

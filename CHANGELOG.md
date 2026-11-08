@@ -1,5 +1,11 @@
 # Changes
 
+## 1.7.1: Status page notices and branding
+
+- Status page notices show a Live or Resolved tag and their kind, when they started and, once over, when they were resolved and how long they lasted.
+- Each status page can have its own logo (PNG, JPEG, WebP or SVG, up to 100 KB), shown beside its name.
+- With Pro (or any plan that isn't free), each status page has its own logo, contact address and colour. Pages no longer show the install's support address, so visitors contact the page's owner, and the foot says "Monitored by" the install's name, linked to its home page.
+
 ## 1.7.0: Text message and WhatsApp alerts
 
 - **Alerts by text and WhatsApp, through your own Twilio account.** On the Alerts tab, add a mobile number, choose WhatsApp or text message, and type the six digit code we send. Up to 3 phones an account. Only the urgent alerts go to phones: something going down, and coming back up.

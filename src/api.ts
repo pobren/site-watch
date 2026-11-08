@@ -44,13 +44,13 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 }
 
 
-interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean; phoneAlerts: number | null }
+interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean; branding: boolean; phoneAlerts: number | null }
 
 /** What an account may have. The owner has no limits here (the licence covers that, on trust); clients have their plan's. */
 async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
-	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true, phoneAlerts: null };
+	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true, branding: true, phoneAlerts: null };
 	const plan = await planById(db, a.plan);
-	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1, phoneAlerts: plan && plan.free !== 1 && (plan.channels ?? "all") === "all" ? plan.phone_alerts ?? 0 : 0 };
+	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1, branding: !!plan && plan.free !== 1, phoneAlerts: plan && plan.free !== 1 && (plan.channels ?? "all") === "all" ? plan.phone_alerts ?? 0 : 0 };
 }
 
 const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, ...PHONE_NAMES, push: "Browser alerts", apns: "App alerts" };
@@ -446,6 +446,22 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		const problem = nameProblem(slug);
 		if (problem) return bad(problem);
 		const intro = typeof b.intro === "string" ? b.intro.trim().slice(0, 500) || null : null;
+		// The page's own logo: left out keeps what's there, empty removes it.
+		// Logo, colour and contact come with Pro: on other plans they're left as they are.
+		if (!limits.branding) { delete b.logo; delete b.support; delete b.colour; }
+		const logo = b.logo === undefined ? undefined : cleanLogo(b.logo);
+		if (logo && typeof logo === "object") return bad(logo.error);
+		// Who visitors contact (the customer, never us) and the page's colour: left out keeps what's there.
+		let support: string | null | undefined = undefined;
+		if (typeof b.support === "string") {
+			const t = b.support.trim();
+			if (!t) support = null;
+			else if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t) && t.length <= 200) support = t;
+			else if (/^https:\/\/[^\s]+$/.test(t) && t.length <= 300) support = t;
+			else return bad("Please give an email address, or a web address starting with https://, for visitors to contact.");
+		}
+		const colour = b.colour === undefined ? undefined : b.colour === "" || b.colour === null ? null : cleanColour(b.colour);
+		if (colour === null && b.colour) return bad("Please pick a colour.");
 		// With Cloudflare for SaaS, own domains go through the wizard (/domain below), so this keeps what's there.
 		const managed = saasReady(env);
 		let host = typeof b.host === "string" && b.host.trim() ? cleanHost(b.host) : null;
@@ -462,8 +478,12 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		const taken = await db.prepare("SELECT id FROM pages WHERE slug = ? AND id != ?").bind(slug, id ?? "").first();
 		if (taken) return bad("Someone already has that name. Please try another.", 409);
 		if (host && (await db.prepare("SELECT id FROM pages WHERE host = ? AND id != ?").bind(host, id ?? "").first())) return bad("Another status page uses that address.", 409);
-		if (id) await db.prepare("UPDATE pages SET slug = ?, title = ?, intro = ?, host = ?, monitors = ? WHERE id = ?").bind(slug, title, intro, host, JSON.stringify(ids), id).run();
-		else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), iso(new Date())).run();
+		if (id) {
+			await db.prepare("UPDATE pages SET slug = ?, title = ?, intro = ?, host = ?, monitors = ? WHERE id = ?").bind(slug, title, intro, host, JSON.stringify(ids), id).run();
+			if (logo !== undefined) await db.prepare("UPDATE pages SET logo = ? WHERE id = ?").bind(logo, id).run();
+			if (support !== undefined) await db.prepare("UPDATE pages SET support = ? WHERE id = ?").bind(support, id).run();
+			if (colour !== undefined) await db.prepare("UPDATE pages SET colour = ? WHERE id = ?").bind(colour, id).run();
+		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, support, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, support ?? null, colour ?? null, iso(new Date())).run();
 		return reply({ ok: true });
 	}
 	// A status page on the customer's own domain: the set-up wizard adds it, checks it, and removes it.
