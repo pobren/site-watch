@@ -61,7 +61,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		limitsOf(db, me),
 	]);
 	const out: Record<string, unknown> = {
-		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified" },
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1 },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "push" || c.kind === "apns" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
@@ -347,6 +347,16 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		await deliver(env, me, { subject: `Test alert from ${inst.brand.name}`, text: `This is a test. Every alert goes to the places that got this one.\n\nOpen ${inst.brand.name}: ${ctx.link}`, urgent: false }, null);
 		const last = await db.prepare("SELECT sent FROM alerts WHERE account_id = ? ORDER BY id DESC LIMIT 1").bind(me.id).first<{ sent: string }>();
 		return reply({ ok: true, sent: last?.sent ?? "" });
+	}
+
+	// -- The Live view link: POST makes one (or a new one with reset; alerts: true shows the latest alerts on it), DELETE turns it off. --
+	if (path === "/api/live-link" && (method === "POST" || method === "DELETE")) {
+		const token = method === "DELETE" ? null : me.live_token && !b.reset ? me.live_token : newId(16);
+		const alerts = method === "DELETE" ? 0 : typeof b.alerts === "boolean" ? (b.alerts ? 1 : 0) : (me.live_alerts ?? 0);
+		await db.prepare("UPDATE accounts SET live_token = ?, live_alerts = ? WHERE id = ?").bind(token, alerts, me.id).run();
+		me.live_token = token;
+		me.live_alerts = alerts;
+		return reply({ ok: true });
 	}
 
 	// -- Status pages --
