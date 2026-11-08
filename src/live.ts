@@ -1,7 +1,7 @@
 // The Live view link: /live/<link>. Every check in an account on one dark screen that never scrolls, for an office
 // wall, a TV's browser or a second screen, refreshing itself every minute. The owner makes (or turns off) the link from
 // an app or the API, and anyone with it can watch without signing in, so it shows names and states only: never server
-// addresses, heartbeat links or alert wording.
+// addresses or heartbeat links. The latest alerts' headlines show only when the owner switches them on.
 
 import { iso, isDown, labelOf, responseTimes, stateOf, statusOf, uptime } from "./core.ts";
 import { accountById, install, isLive, type AccountRow, type MonitorRow } from "./db.ts";
@@ -27,6 +27,13 @@ export async function renderLive(db: D1Database, token: string): Promise<Respons
 		const name = r.name ?? (r.kind === "website" ? labelOf(r) : r.kind === "heartbeat" ? "Scheduled job" : r.kind === "mail" ? "Mail server" : "Server");
 		return { name, status, down: isDown(s), ms: s.ms, up30: uptime(s, now, 30), line: responseTimes(s).slice(-24).map((p) => p.ms) };
 	}).sort((a, b) => (RANK[a.status] ?? 5) - (RANK[b.status] ?? 5));
+	const alerts = account.live_alerts === 1
+		? (await db.prepare("SELECT at, subject, urgent FROM alerts WHERE account_id = ? ORDER BY id DESC LIMIT 8").bind(account.id).all<{ at: string; subject: string; urgent: number }>()).results
+		: [];
+	const hhmm = (at: string) => new Date(at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: account.tz || "UTC" });
+	const side = account.live_alerts === 1
+		? `<aside><h2>Latest alerts</h2>${alerts.length ? `<ul>${alerts.map((a) => `<li${a.urgent ? ' class="u"' : ""}><time>${esc(hhmm(a.at))}</time><b>${esc(a.subject)}</b></li>`).join("")}</ul>` : `<p class="e2">No alerts yet. Quiet is good.</p>`}</aside>`
+		: "";
 	const down = items.filter((i) => i.status === "down").length;
 	const warn = items.filter((i) => ["cert", "blocked", "unsure"].includes(i.status)).length;
 	const headline = down ? (down === 1 ? "1 is down" : `${down} are down`) : warn ? (warn === 1 ? "1 needs a look" : `${warn} need a look`) : items.length === 1 ? "Working" : `All ${items.length} working`;
@@ -55,7 +62,13 @@ header img{width:44px;height:44px;border-radius:10px}
 .gap{flex:1}.dot{width:12px;height:12px;border-radius:50%;background:var(--up);box-shadow:0 0 0 5px rgba(34,197,94,.22);display:inline-block;margin-right:10px}
 .dot.bad{background:var(--down);box-shadow:0 0 0 5px rgba(248,113,113,.25)}.live{color:#d1d5db;display:flex;align-items:center}
 #clock{font:700 clamp(2rem,4vw,2.8rem)/1 ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums}
-main{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px;padding:24px clamp(16px,3vw,40px)}
+.w{display:flex;flex-wrap:wrap;gap:22px;padding:24px clamp(16px,3vw,40px);align-items:flex-start}
+main{flex:999 1 640px;min-width:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
+aside{flex:1 1 300px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px 22px}
+aside h2{margin:0 0 8px;font-size:.85rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;color:var(--soft)}
+aside ul{list-style:none;margin:0;padding:0}aside li{display:flex;gap:14px;padding:12px 0;border-top:1px solid var(--line)}aside li:first-child{border-top:0}
+aside time{flex:none;width:96px;font:700 .85rem ui-monospace,Menlo,monospace;color:var(--soft);padding-top:2px}aside b{overflow-wrap:anywhere}aside .u b{color:var(--down-ink)}
+.e2{color:var(--soft)}
 .t{background:var(--panel);border:2px solid var(--line);border-radius:18px;padding:16px 18px;display:flex;flex-direction:column;gap:9px;min-height:148px}
 .t.warn{background:#1c1608;border-color:#a16207}.t.down{background:#2a0d10;border-color:#dc2626}
 .r{display:flex;align-items:center;gap:10px}.r i{width:12px;height:12px;border-radius:50%;background:var(--up)}
@@ -71,7 +84,7 @@ footer{display:flex;flex-wrap:wrap;gap:8px 28px;padding:14px clamp(16px,3vw,40px
 </style></head><body>
 <header>${brand.logo ? `<img src="${esc(brand.logo)}" alt="">` : ""}<div class="ti"><small>Live view</small><b${down ? ' class="bad"' : ""}>${esc(headline)}</b></div><span class="gap"></span>
 <span class="live"><span class="dot${down ? " bad" : ""}"></span>Live · refreshes every minute</span><span id="clock"></span></header>
-<main>${items.length ? items.map(tile).join("") : `<p class="e">Nothing watched yet.</p>`}</main>
+<div class="w"><main>${items.length ? items.map(tile).join("") : `<p class="e">Nothing watched yet.</p>`}</main>${side}</div>
 <footer><span>${esc(brand.name)}</span><span class="gap"></span><span>Updated ${now.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: account.tz || "UTC" })}</span></footer>
 <script>const c=document.getElementById("clock"),t=()=>c.textContent=new Date().toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});t();setInterval(t,1000);try{navigator.wakeLock&&navigator.wakeLock.request("screen")}catch(e){}</script>
 </body></html>`;

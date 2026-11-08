@@ -14,7 +14,7 @@ function fakeDb(account: Record<string, unknown> | null, monitors: Record<string
 					if (sql.includes("FROM meta")) return null;
 					return null;
 				},
-				async all() { return { results: sql.includes("FROM monitors") ? monitors : [] }; },
+				async all() { return { results: sql.includes("FROM monitors") ? monitors : sql.includes("FROM alerts") ? [{ at: "2026-11-08T09:00:00Z", subject: "Down: Mail server", urgent: 1 }] : [] }; },
 				async run() { return {}; },
 			};
 			return q;
@@ -35,6 +35,14 @@ test("the Live view shows names and states, worst first, and never server addres
 	assert.match(html, /1 is down/);
 	assert.ok(html.indexOf("Mail server") < html.indexOf("example.com"), "down first");
 	assert.ok(!html.includes("secret-host"), "no server address");
+	assert.ok(!html.includes("Latest alerts"), "alerts stay off unless switched on");
+});
+
+test("the latest alerts show when the owner switches them on", async () => {
+	const acct = { id: "a1", role: "owner", status: "active", tz: "UTC", live_alerts: 1 };
+	const html = await (await renderLive(fakeDb(acct, []), "0".repeat(32))).text();
+	assert.match(html, /Latest alerts/);
+	assert.match(html, /Down: Mail server/);
 });
 
 test("a turned off link says so", async () => {

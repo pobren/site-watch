@@ -61,7 +61,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		limitsOf(db, me),
 	]);
 	const out: Record<string, unknown> = {
-		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null },
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1 },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "push" || c.kind === "apns" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
@@ -349,11 +349,13 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		return reply({ ok: true, sent: last?.sent ?? "" });
 	}
 
-	// -- The Live view link: POST makes one (or a new one with reset), DELETE turns it off. --
+	// -- The Live view link: POST makes one (or a new one with reset; alerts: true shows the latest alerts on it), DELETE turns it off. --
 	if (path === "/api/live-link" && (method === "POST" || method === "DELETE")) {
 		const token = method === "DELETE" ? null : me.live_token && !b.reset ? me.live_token : newId(16);
-		await db.prepare("UPDATE accounts SET live_token = ? WHERE id = ?").bind(token, me.id).run();
+		const alerts = method === "DELETE" ? 0 : typeof b.alerts === "boolean" ? (b.alerts ? 1 : 0) : (me.live_alerts ?? 0);
+		await db.prepare("UPDATE accounts SET live_token = ?, live_alerts = ? WHERE id = ?").bind(token, alerts, me.id).run();
 		me.live_token = token;
+		me.live_alerts = alerts;
 		return reply({ ok: true });
 	}
 

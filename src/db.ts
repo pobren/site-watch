@@ -80,6 +80,8 @@ export interface AccountRow {
 	verify_token: string | null;
 	/** The private Live view link (/live/<token>), when the account has made one. */
 	live_token?: string | null;
+	/** 1 when the Live view link shows the latest alerts too. */
+	live_alerts?: number;
 	created_at: string;
 }
 
@@ -167,6 +169,7 @@ const COLUMNS = [
 	"ALTER TABLE plans ADD COLUMN price_label_year TEXT",
 	"ALTER TABLE accounts ADD COLUMN verify_token TEXT",
 	"ALTER TABLE accounts ADD COLUMN live_token TEXT",
+	"ALTER TABLE accounts ADD COLUMN live_alerts INTEGER NOT NULL DEFAULT 0",
 ];
 const SCHEMA_VERSION = "5";
 
