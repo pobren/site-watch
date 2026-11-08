@@ -1,6 +1,6 @@
 {
 	"name": "site-watch",
-	"version": "1.6.1",
+	"version": "1.6.2",
 	"private": true,
 	"description": "Watch your websites, mail servers, ports and scheduled jobs from your own Cloudflare account. Free for personal and small business use, source available.",
 	"license": "SEE LICENSE IN LICENSE",

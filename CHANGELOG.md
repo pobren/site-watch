@@ -1,5 +1,9 @@
 # Changes
 
+## 1.6.2
+
+- The status page name checker and the own domain wizard's progress check answered "Not found": they now work.
+
 ## 1.6.1: Live view links that run out, and status page names
 
 - **Status pages can live at name.yourdomain** (set PAGE_DOMAIN, add a wildcard DNS record and a *.yourdomain/* route). /status/name keeps working.
