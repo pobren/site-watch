@@ -171,7 +171,9 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 		const data = await everything(env, me, url.origin);
 		return json({ exportedAt: iso(new Date()), ...data }, 200, { "content-disposition": `attachment; filename="site-watch-${iso(new Date()).slice(0, 10)}.json"` });
 	}
-	if (method !== "POST" && method !== "DELETE") return bad("Not found", 404);
+	// Two reads live with the status page actions: the name checker and the own domain wizard's progress.
+	const readable = method === "GET" && (path === "/api/pages/name" || /^\/api\/pages\/[0-9a-f]{12}\/domain$/.test(path));
+	if (method !== "POST" && method !== "DELETE" && !readable) return bad("Not found", 404);
 	const b = method === "POST" ? await body(request) : {};
 
 	// -- API keys and the AI connector (Account tab). Only from the signed-in page, never with a key. --
