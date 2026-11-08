@@ -82,6 +82,8 @@ export interface AccountRow {
 	live_token?: string | null;
 	/** 1 when the Live view link shows the latest alerts too. */
 	live_alerts?: number;
+	/** When the Live view link stops working (ISO time), or null for never. */
+	live_expires?: string | null;
 	created_at: string;
 }
 
@@ -170,8 +172,9 @@ const COLUMNS = [
 	"ALTER TABLE accounts ADD COLUMN verify_token TEXT",
 	"ALTER TABLE accounts ADD COLUMN live_token TEXT",
 	"ALTER TABLE accounts ADD COLUMN live_alerts INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE accounts ADD COLUMN live_expires TEXT",
 ];
-const SCHEMA_VERSION = "5";
+const SCHEMA_VERSION = "6";
 
 let ready: Promise<void> | null = null;
 

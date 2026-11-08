@@ -49,3 +49,9 @@ test("a turned off link says so", async () => {
 	const res = await renderLive(fakeDb(null, []), "0".repeat(32));
 	assert.equal(res.status, 404);
 });
+
+test("a link past its expiry time says it has run out", async () => {
+	const acct = { id: "a1", role: "owner", status: "active", tz: "UTC", live_expires: "2020-01-01T00:00:00Z" };
+	const res = await renderLive(fakeDb(acct, []), "0".repeat(32));
+	assert.equal(res.status, 410);
+});
