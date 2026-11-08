@@ -1,5 +1,14 @@
 # Changes
 
+## 1.7.0: Text message and WhatsApp alerts
+
+- **Alerts by text and WhatsApp, through your own Twilio account.** On the Alerts tab, add a mobile number, choose WhatsApp or text message, and type the six digit code we send. Up to 3 phones an account. Only the urgent alerts go to phones: something going down, and coming back up.
+- **One message, not five.** Alerts made in the same run go out together, one message per phone ("a.com, b.com and 2 more are down").
+- **A monthly allowance on each plan** (Text and WhatsApp alerts a month, on the Admin tab's plan form), shown on the Alerts tab as "3 of 20 used this month". When it's used up, alerts carry on by email and on devices, and the client gets one email saying so.
+- **Top ups.** Set up to three packs on the Admin tab with one off Stripe prices. Clients on a plan with phone alerts buy them from the Alerts tab; they last a year and are used after the month's allowance.
+- **Limits so a bad day can't run up a bill:** 30 phone messages a day per account, PHONE_DAILY_MAX (250 unless set) for the whole install, 3 codes a day per account, phones only in the countries in PHONE_COUNTRIES (UK, US and Canada unless set). A number Twilio says is unsubscribed or not on WhatsApp is switched off, and a message Twilio turns away isn't charged to the allowance.
+- New secrets: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_SMS_FROM, TWILIO_SMS_FROM_US, TWILIO_WHATSAPP_FROM, TWILIO_WA_DOWN, TWILIO_WA_UP and TWILIO_WA_CODE. See Text and WhatsApp alerts in the README.
+
 ## 1.6.2
 
 - The status page name checker and the own domain wizard's progress check answered "Not found": they now work.

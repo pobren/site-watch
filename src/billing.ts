@@ -11,6 +11,7 @@ import { json } from "./api-auth.ts";
 import { hashPassword, passwordProblem, sessionCookie } from "./auth.ts";
 import { cleanEmail, cleanName, iso, verifyStripe } from "./core.ts";
 import { getMeta, install, newId, type AccountRow, type Env, type PlanRow } from "./db.ts";
+import { phonePacks, TOPUP_DAYS } from "./phones.ts";
 import { ROBOT_ERROR, turnstileOk } from "./turnstile.ts";
 
 const API = "https://api.stripe.com/v1";
@@ -55,7 +56,7 @@ export async function livePlans(db: D1Database, paid = true): Promise<PlanRow[]>
 
 export const publicPlan = (p: PlanRow) => ({
 	id: p.id, name: p.name, blurb: p.blurb, price: p.price_label, priceYear: p.stripe_price_year ? p.price_label_year : null, free: p.free === 1,
-	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all",
+	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all", phoneAlerts: p.phone_alerts ?? 0,
 });
 
 /** The free plan clients drop back to when a paid subscription ends, if there is one. */
@@ -181,6 +182,31 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 		const problem = await sendVerify(env, me, url.origin);
 		return problem ? json({ error: `We couldn't send the email: ${problem}` }, 502) : json({ ok: true });
 	}
+	if (path === "/api/billing/topup") {
+		// A one off payment for more text and WhatsApp alerts (phones.ts), for paying clients whose plan includes them.
+		if (!(await paymentsOn(env))) return json({ error: "Payments aren't switched on." }, 403);
+		const b = await request.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+		const pack = (await phonePacks(db))[Number(b.pack)];
+		const plan = await db.prepare("SELECT * FROM plans WHERE id = ?").bind(me.plan).first<PlanRow>();
+		if (!pack) return json({ error: "Please choose a top up." }, 400);
+		if (!(me.status === "active" || me.status === "trialing") || !plan?.phone_alerts) return json({ error: "Top ups are for plans that include text and WhatsApp alerts." }, 403);
+		const managed = env.STRIPE_MANAGED_PAYMENTS === "on";
+		try {
+			const session = await stripe<{ url: string }>(env, "/checkout/sessions", {
+				mode: "payment",
+				...(managed ? { managed_payments: { enabled: "true" } } : {}),
+				line_items: { 0: { price: pack.price, quantity: 1 } },
+				client_reference_id: me.id,
+				...(me.stripe_customer ? { customer: me.stripe_customer } : { customer_email: me.email }),
+				metadata: { account: me.id, phone_alerts: String(pack.alerts) },
+				success_url: `${url.origin}/?topup=1#alerts`,
+				cancel_url: `${url.origin}/#alerts`,
+			}, managed ? MANAGED_VERSION : VERSION);
+			return json({ checkout: session.url });
+		} catch (e) {
+			return json({ error: `We couldn't start the payment: ${e instanceof Error ? e.message : e}` }, 502);
+		}
+	}
 	if (path === "/api/billing/checkout") {
 		if (!(await paymentsOn(env))) return json({ error: "Payments aren't switched on." }, 403);
 		const b = await request.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
@@ -216,6 +242,15 @@ async function webhook(request: Request, env: Env): Promise<Response> {
 	const o = event.data.object;
 	if (event.type === "checkout.session.completed") {
 		const account = (o.client_reference_id as string) ?? (o.metadata as Record<string, string> | undefined)?.account;
+		const topup = Number((o.metadata as Record<string, string> | undefined)?.phone_alerts);
+		if (account && o.mode === "payment" && o.payment_status === "paid" && Number.isInteger(topup) && topup > 0) {
+			// Text and WhatsApp top up: counted once per payment, even if Stripe sends the event again. Lasts a year.
+			const r = await db.prepare("INSERT OR IGNORE INTO phone_topups (session_id, account_id, alerts, at) VALUES (?, ?, ?, ?)").bind(String(o.id), account, topup, iso(new Date())).run();
+			if ((r.meta.changes ?? 0) > 0) {
+				await db.prepare("UPDATE accounts SET phone_credits = CASE WHEN phone_credits_until IS NULL OR phone_credits_until < ? THEN 0 ELSE phone_credits END + ?, phone_credits_until = ? WHERE id = ?")
+					.bind(iso(new Date()), topup, iso(new Date(Date.now() + TOPUP_DAYS * 86_400_000)), account).run();
+			}
+		}
 		if (account && typeof o.subscription === "string") {
 			const sub = await stripe<Sub>(env, `/subscriptions/${o.subscription}`);
 			await saveSub(db, account, sub);

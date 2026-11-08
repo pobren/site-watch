@@ -5,9 +5,10 @@
 // is switched on, clients sign up for one of the owner's plans and get accounts of their own.
 
 import type { ApnsEnv } from "./apns.ts";
+import type { PhoneEnv } from "./phones.ts";
 import type { WhiteLabelEnv } from "./whitelabel.ts";
 
-export interface Env extends WhiteLabelEnv, ApnsEnv {
+export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 	DB: D1Database;
 	/** Cloudflare's send_email binding. Alerts by email need a domain with Email Routing on (see the README). */
 	EMAIL?: SendEmail;
@@ -92,6 +93,9 @@ export interface AccountRow {
 	live_alerts?: number;
 	/** When the Live view link stops working (ISO time), or null for never. */
 	live_expires?: string | null;
+	/** 1.7.0: phone alerts bought as top ups, and when they run out. */
+	phone_credits?: number;
+	phone_credits_until?: string | null;
 	created_at: string;
 }
 
@@ -116,6 +120,8 @@ export interface PlanRow {
 	/** Optional yearly price, shown beside the monthly one. */
 	stripe_price_year: string | null;
 	price_label_year: string | null;
+	/** 1.7.0: text message and WhatsApp alerts included each month (0: none). */
+	phone_alerts?: number;
 }
 
 const SCHEMA = [
@@ -169,6 +175,15 @@ const SCHEMA = [
 		session_ver INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, last_used TEXT)`,
 	`CREATE INDEX IF NOT EXISTS app_devices_account ON app_devices (account_id)`,
 	`CREATE TABLE IF NOT EXISTS app_codes (code_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL, expires INTEGER NOT NULL)`,
+	// 1.7.0: text message and WhatsApp alerts (phones.ts). Alerts wait in the outbox until the run ends, so several go
+	// as one message; every message sent is noted, for the monthly allowance and the daily limits; top ups count once.
+	`CREATE TABLE IF NOT EXISTS phone_outbox (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, alert_id INTEGER, event TEXT NOT NULL, label TEXT NOT NULL, at TEXT NOT NULL, claim TEXT)`,
+	`CREATE TABLE IF NOT EXISTS phone_sends (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, channel_id INTEGER, kind TEXT NOT NULL, counted INTEGER NOT NULL DEFAULT 1, at TEXT NOT NULL)`,
+	`CREATE INDEX IF NOT EXISTS phone_sends_account_at ON phone_sends (account_id, at)`,
+	`CREATE INDEX IF NOT EXISTS phone_sends_at ON phone_sends (at)`,
+	`CREATE TABLE IF NOT EXISTS phone_topups (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL, alerts INTEGER NOT NULL, at TEXT NOT NULL)`,
 ];
 /** Columns added after 1.0.0. Each is tried on its own, as it may already be there. */
 const COLUMNS = [
@@ -182,8 +197,11 @@ const COLUMNS = [
 	"ALTER TABLE accounts ADD COLUMN live_alerts INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE accounts ADD COLUMN live_expires TEXT",
 	"ALTER TABLE pages ADD COLUMN cf_host_id TEXT",
+	"ALTER TABLE plans ADD COLUMN phone_alerts INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE accounts ADD COLUMN phone_credits INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE accounts ADD COLUMN phone_credits_until TEXT",
 ];
-const SCHEMA_VERSION = "6";
+const SCHEMA_VERSION = "7";
 
 let ready: Promise<void> | null = null;
 
