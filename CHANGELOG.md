@@ -1,5 +1,13 @@
 # Changes
 
+## 1.6.1: Live view links that run out, and status page names
+
+- **Status pages can live at name.yourdomain** (set PAGE_DOMAIN, add a wildcard DNS record and a *.yourdomain/* route). /status/name keeps working.
+- **Status pages on your own domain, with a set-up wizard** (Cloudflare for SaaS: set CF_ZONE_ID, CF_API_TOKEN and DOMAIN_TARGET). POST, GET and DELETE /api/pages/:id/domain add the domain, report whether the CNAME is in place and the certificate is ready, and remove it. Paid plans only for clients.
+- **Names are checked as you type** (GET /api/pages/name?name=): free or taken, and rude names, names kept for the install (www, mail, admin and so on) and names that look like a bank, a big company or a sign-in page are refused.
+
+- **Set how long a Live view link works**, from an hour to a year or until you turn it off (POST /api/live-link with expires in hours). After that the page says the link has run out.
+
 ## 1.6.0: Live view link
 
 - **Watch somewhere else.** Make a private Live view link from an app (or POST /api/live-link) and open it on an office TV, a second screen or a tablet. It shows every check on one dark screen, worst first, with a clock, and refreshes itself every minute. No sign in needed, so it shows names and states only, never server addresses. Switch on **Show latest alerts** to add the latest alert headlines beside them (POST /api/live-link with alerts: true). Make a new link to stop the old one working, or turn it off (DELETE /api/live-link).

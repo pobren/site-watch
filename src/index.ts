@@ -6,7 +6,7 @@
 //   /api/v1/*            the public API, with an API key (v1.ts, keys.ts)
 //   /mcp                 the AI connector (mcp.ts), with its OAuth sign-in (connect.ts, oauth.ts)
 //   /hb/<code>           a scheduled job checking in (no sign-in: the code is the secret)
-//   /status/<address>    public status pages (status.ts), or / on a status page's own domain
+//   /status/<address>    public status pages (status.ts), or / on a status page's own domain or <address>.PAGE_DOMAIN
 //   /live/<link>         the private Live view link (live.ts): every check on one dark screen
 //   /stripe/webhook      Stripe, when selling to clients is on (billing.ts)
 //   /sw.js               the service worker that shows browser alerts (push.ts)
@@ -29,7 +29,7 @@ import { renderLive } from "./live.ts";
 import { handleV1 } from "./v1.ts";
 import { appPage, connectPage } from "./ui.ts";
 
-const VERSION = "1.6.0";
+const VERSION = "1.6.1";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -96,7 +96,7 @@ export default {
 		}
 
 		if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
-		const page = await findPage(env.DB, path, url.hostname);
+		const page = await findPage(env.DB, path, url.hostname, env.PAGE_DOMAIN?.toLowerCase());
 		if (page) return withHeaders(await renderStatus(env.DB, page), { "x-frame-options": "SAMEORIGIN" });
 
 		const live = /^\/live\/([0-9a-f]{32})\/?$/.exec(path);
@@ -138,6 +138,7 @@ export default {
 			if (file.status !== 404) return withHeaders(file);
 		}
 		if (path === "/robots.txt") return new Response("User-agent: *\nDisallow: /\nAllow: /status/\n", { headers: { "content-type": "text/plain" } });
+		if (env.PAGE_DOMAIN && url.hostname.endsWith(`.${env.PAGE_DOMAIN.toLowerCase()}`)) return new Response("There's no status page at this address.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
 		return new Response("Not found", { status: 404, headers: { "content-type": "text/plain" } });
 	},
 

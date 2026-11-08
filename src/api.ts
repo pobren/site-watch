@@ -16,6 +16,13 @@ import { DEFAULT_BRAND, install, isLive, newId, planById, setMeta, type AccountR
 import { cleanSub, vapidKeys } from "./push.ts";
 import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
+import { nameProblem, tidyName } from "./names.ts";
+import { addHostname, domainState, removeHostname, saasReady } from "./domains.ts";
+
+/** Where a status page lives: name.PAGE_DOMAIN when the install has one, otherwise /status/name. */
+export function pageAddress(env: Env, origin: string, slug: string): string {
+	return env.PAGE_DOMAIN ? `https://${slug}.${env.PAGE_DOMAIN.toLowerCase()}` : `${origin}/status/${slug}`;
+}
 
 const bad = (error: string, status = 400) => json({ error }, status);
 
@@ -36,13 +43,13 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 }
 
 
-interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null }
+interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean }
 
 /** What an account may have. The owner has no limits here (the licence covers that, on trust); clients have their plan's. */
 async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
-	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null };
+	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true };
 	const plan = await planById(db, a.plan);
-	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null };
+	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1 };
 }
 
 const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, push: "Browser alerts", apns: "App alerts" };
@@ -61,11 +68,13 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		limitsOf(db, me),
 	]);
 	const out: Record<string, unknown> = {
-		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1 },
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "push" || c.kind === "apns" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
-		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: `${origin}/status/${p.slug}` })),
+		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug) })),
+		pageDomain: env.PAGE_DOMAIN?.toLowerCase() ?? null,
+		domainTarget: env.DOMAIN_TARGET?.toLowerCase() ?? null,
 		notices: notices.results,
 		alerts: alerts.results,
 		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
@@ -349,25 +358,41 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		return reply({ ok: true, sent: last?.sent ?? "" });
 	}
 
-	// -- The Live view link: POST makes one (or a new one with reset; alerts: true shows the latest alerts on it), DELETE turns it off. --
+	// -- The Live view link: POST makes one (or a new one with reset; alerts: true shows the latest alerts on it; expires: hours it works for, or null), DELETE turns it off. --
 	if (path === "/api/live-link" && (method === "POST" || method === "DELETE")) {
 		const token = method === "DELETE" ? null : me.live_token && !b.reset ? me.live_token : newId(16);
 		const alerts = method === "DELETE" ? 0 : typeof b.alerts === "boolean" ? (b.alerts ? 1 : 0) : (me.live_alerts ?? 0);
-		await db.prepare("UPDATE accounts SET live_token = ?, live_alerts = ? WHERE id = ?").bind(token, alerts, me.id).run();
+		// expires: how many hours the link works for (1 hour to a year), or null for until it's turned off.
+		const hours = typeof b.expires === "number" && b.expires >= 1 ? Math.min(Math.round(b.expires), 24 * 366) : null;
+		const expires = method === "DELETE" ? null : "expires" in b ? (hours ? iso(new Date(Date.now() + hours * 3_600_000)) : null) : (me.live_expires ?? null);
+		await db.prepare("UPDATE accounts SET live_token = ?, live_alerts = ?, live_expires = ? WHERE id = ?").bind(token, alerts, expires, me.id).run();
 		me.live_token = token;
 		me.live_alerts = alerts;
+		me.live_expires = expires;
 		return reply({ ok: true });
 	}
 
 	// -- Status pages --
+	// Checked as people type a name: allowed, and free (their own page's current name counts as free).
+	if (path === "/api/pages/name" && method === "GET") {
+		const name = tidyName(url.searchParams.get("name"));
+		const id = url.searchParams.get("id") ?? "";
+		const problem = nameProblem(name);
+		if (problem) return Response.json({ ok: false, name, reason: problem, address: pageAddress(env, url.origin, name || "name") });
+		const taken = await db.prepare("SELECT 1 FROM pages WHERE slug = ? AND id != ?").bind(name, id).first();
+		return Response.json(taken ? { ok: false, name, reason: "Someone already has that name. Please try another.", address: pageAddress(env, url.origin, name) } : { ok: true, name, address: pageAddress(env, url.origin, name) });
+	}
 	if (path === "/api/pages" && method === "POST") {
 		const title = cleanName(b.title, 80);
 		if (!title) return bad("Please give the status page a title, such as Example Ltd status.");
-		const slug = cleanSlug(b.slug || title);
-		if (!slug) return bad("Please choose an address for the page, using letters, numbers and dashes.");
+		const slug = tidyName(b.slug || title);
+		const problem = nameProblem(slug);
+		if (problem) return bad(problem);
 		const intro = typeof b.intro === "string" ? b.intro.trim().slice(0, 500) || null : null;
-		const host = typeof b.host === "string" && b.host.trim() ? cleanHost(b.host) : null;
-		if (typeof b.host === "string" && b.host.trim() && !host) return bad("Please enter just the address, such as status.example.com.");
+		// With Cloudflare for SaaS, own domains go through the wizard (/domain below), so this keeps what's there.
+		const managed = saasReady(env);
+		let host = typeof b.host === "string" && b.host.trim() ? cleanHost(b.host) : null;
+		if (!managed && typeof b.host === "string" && b.host.trim() && !host) return bad("Please enter just the address, such as status.example.com.");
 		const mine = new Set((await db.prepare("SELECT id FROM monitors WHERE account_id = ?").bind(me.id).all<{ id: string }>()).results.map((r) => r.id));
 		const ids = Array.isArray(b.monitors) ? b.monitors.filter((x): x is string => typeof x === "string" && mine.has(x)).slice(0, 60) : [];
 		const id = typeof b.id === "string" && /^[0-9a-f]{12}$/.test(b.id) ? b.id : null;
@@ -376,17 +401,51 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			const n = await db.prepare("SELECT COUNT(*) AS n FROM pages WHERE account_id = ?").bind(me.id).first<{ n: number }>();
 			if ((n?.n ?? 0) >= limits.pages) return bad(limits.pages ? `Your plan includes ${limits.pages} status page${limits.pages === 1 ? "" : "s"}.` : "Your plan doesn't include status pages.", 403);
 		}
+		if (managed) host = id ? ((await db.prepare("SELECT host FROM pages WHERE id = ?").bind(id).first<string>("host")) ?? null) : null;
 		const taken = await db.prepare("SELECT id FROM pages WHERE slug = ? AND id != ?").bind(slug, id ?? "").first();
-		if (taken) return bad("Another status page uses that address. Please choose another.", 409);
+		if (taken) return bad("Someone already has that name. Please try another.", 409);
 		if (host && (await db.prepare("SELECT id FROM pages WHERE host = ? AND id != ?").bind(host, id ?? "").first())) return bad("Another status page uses that address.", 409);
 		if (id) await db.prepare("UPDATE pages SET slug = ?, title = ?, intro = ?, host = ?, monitors = ? WHERE id = ?").bind(slug, title, intro, host, JSON.stringify(ids), id).run();
 		else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), iso(new Date())).run();
 		return reply({ ok: true });
 	}
+	// A status page on the customer's own domain: the set-up wizard adds it, checks it, and removes it.
+	const dm = /^\/api\/pages\/([0-9a-f]{12})\/domain$/.exec(path);
+	if (dm) {
+		const page = await db.prepare("SELECT id, host, cf_host_id FROM pages WHERE id = ? AND account_id = ?").bind(dm[1], me.id).first<{ id: string; host: string | null; cf_host_id: string | null }>();
+		if (!page) return bad("We couldn't find that page.", 404);
+		if (method === "GET") return json(page.host ? await domainState(env, page.host, page.cf_host_id) : { host: null });
+		if (method === "DELETE") {
+			await removeHostname(env, page.cf_host_id);
+			await db.prepare("UPDATE pages SET host = NULL, cf_host_id = NULL WHERE id = ?").bind(page.id).run();
+			return reply();
+		}
+		if (method === "POST") {
+			if (!limits.ownDomain) return bad("Your own domain comes with Pro. You can upgrade on the website.", 403);
+			const host = cleanHost(b.host);
+			if (!host) return bad("Please enter just the address, such as status.yourcompany.com.");
+			if (env.PAGE_DOMAIN && (host === env.PAGE_DOMAIN.toLowerCase() || host.endsWith(`.${env.PAGE_DOMAIN.toLowerCase()}`))) return bad("Please use a domain of your own.");
+			if (await db.prepare("SELECT 1 FROM pages WHERE host = ? AND id != ?").bind(host, page.id).first()) return bad("Another status page uses that address.", 409);
+			let id: string | null = null;
+			if (saasReady(env)) {
+				if (page.cf_host_id && page.host !== host) await removeHostname(env, page.cf_host_id);
+				try {
+					id = page.host === host && page.cf_host_id ? page.cf_host_id : await addHostname(env, host);
+				} catch (e) {
+					return bad(`We couldn't add that domain: ${(e as Error).message}`, 502);
+				}
+			}
+			await db.prepare("UPDATE pages SET host = ?, cf_host_id = ? WHERE id = ?").bind(host, id, page.id).run();
+			return reply({ domain: await domainState(env, host, id) });
+		}
+		return bad("Not found", 404);
+	}
 	const pg = /^\/api\/pages\/([0-9a-f]{12})(\/notices)?$/.exec(path);
 	if (pg) {
 		if (!(await db.prepare("SELECT 1 FROM pages WHERE id = ? AND account_id = ?").bind(pg[1], me.id).first())) return bad("We couldn't find that page.", 404);
 		if (method === "DELETE") {
+			const cfId = await db.prepare("SELECT cf_host_id FROM pages WHERE id = ?").bind(pg[1]).first<string>("cf_host_id");
+			await removeHostname(env, cfId);
 			await db.batch([db.prepare("DELETE FROM notices WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM pages WHERE id = ?").bind(pg[1])]);
 			return reply();
 		}

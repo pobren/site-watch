@@ -16,6 +16,9 @@ export async function renderLive(db: D1Database, token: string): Promise<Respons
 	if (!row) return gone();
 	const account = (await accountById(db, row.id)) as AccountRow | null;
 	if (!account || !isLive(account)) return gone();
+	if (account.live_expires && account.live_expires <= iso(new Date())) {
+		return new Response("This Live view link has run out. Ask whoever shared it for a new one.", { status: 410, headers: { "content-type": "text/plain; charset=utf-8", "x-robots-tag": "noindex" } });
+	}
 	const { brand } = await install(db);
 	const now = new Date();
 	const mons = (await db.prepare("SELECT * FROM monitors WHERE account_id = ? ORDER BY created_at, id").bind(account.id).all<MonitorRow>()).results;
