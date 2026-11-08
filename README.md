@@ -150,6 +150,26 @@ On the **Alerts** tab, **Turn on alerts on this device** makes alerts pop up on 
 
 There's nothing to set up: the first time someone turns alerts on, Site Watch makes its own signing keys and keeps them in the database. Alerts are encrypted for each browser, so the push services (Google, Apple, Mozilla, Microsoft) can't read them.
 
+## Text and WhatsApp alerts
+
+Site Watch can send the urgent alerts (down, and back up) by text message and WhatsApp, through your own [Twilio](https://www.twilio.com/try-twilio) account. You pay Twilio for each message, so it's off until you add the secrets below, and there are limits on every account.
+
+1. Make a Twilio account and upgrade it (the trial can only text phones you've verified yourself). Add some credit and leave auto recharge off.
+2. **Text messages:** for the UK and most of Europe, texts can come from a name of up to 11 letters (such as `SitePatrol`) instead of a number. For US and Canadian phones you need a verified toll free or 10DLC number of your own.
+3. **WhatsApp:** connect a WhatsApp sender in the Twilio console (Messaging, Senders, WhatsApp senders). Meta checks your business first. Then make three templates in Twilio's Content Template Builder and send them to Meta for approval, in the **Utility** category (the code one as **Authentication**). Keep them plain: anything that reads like an offer gets charged as marketing. For example:
+   - Down: `Alert: {{1}} stopped working at about {{2}}. We'll message you again when it's back. Open {{3}} for details.`
+   - Back up: `Good news: {{1}} is working again. Open {{2}} for details.`
+   - Code: `{{1}} is your verification code.`
+4. On the Worker, open **Settings › Variables and Secrets** and add these as secrets:
+   - `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` (Twilio console, Account info)
+   - `TWILIO_SMS_FROM`: the sender name or number for texts (leave it out for WhatsApp only)
+   - `TWILIO_SMS_FROM_US`: your US number for texts to +1 phones (optional)
+   - `TWILIO_WHATSAPP_FROM`: your WhatsApp number, such as `+447700900123`
+   - `TWILIO_WA_DOWN`, `TWILIO_WA_UP` and `TWILIO_WA_CODE`: the three templates' Content SIDs (they start `HX`)
+5. Optional variables: `PHONE_COUNTRIES` (calling codes phones may be in, default `44,1`) and `PHONE_DAILY_MAX` (most phone messages a day for the whole install, default `250`).
+
+Your own account has no monthly limit. For clients, set **Text and WhatsApp alerts a month** on each plan (0 leaves them off), and optionally add **Top ups** on the Admin tab: one off Stripe prices for extra alerts, which last a year. Each phone is confirmed with a six digit code before it gets anything; alerts made in the same run go as one message per phone; each account sends 30 a day at most.
+
 ## Apps on phones and computers
 
 Apps (such as the Site Patrol app for iPhone, iPad and Mac) use the same API as the website. People sign in on the app with their email address and password, or with **Sign in on your phone** on the **Account** tab, which shows a QR code that works once, for 5 minutes. Each app shows on the Account tab, where it can be signed out. **Sign out everywhere** and a new password sign apps out too.

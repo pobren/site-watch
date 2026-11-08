@@ -3,11 +3,12 @@
 // and a daily cap stops a server that keeps going up and down from flooding anyone.
 
 import { EmailMessage } from "cloudflare:email";
-import { CHANNEL_KINDS, hookMonitor, webhookHeaders, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
-import { install, newId, planById, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { CHANNEL_KINDS, hookMonitor, labelOf, webhookHeaders, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
+import { accountById, getMeta, install, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { brandedHtml, toneOf, type EmailLook } from "./email.ts";
 import { sendApns } from "./apns.ts";
 import { sendPush, type PushSub } from "./push.ts";
+import { flushPhones, isPhone, monthStart, queuePhone, type Allowance } from "./phones.ts";
 import { WL } from "./whitelabel.ts";
 
 interface ChannelRow { id: number; kind: string; name: string; url: string; secret: string | null; on_off: number; fails: number }
@@ -100,6 +101,8 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 		const contact = inst.alertFrom ? `mailto:${inst.alertFrom}` : (inst.origin ?? "mailto:alerts@example.com");
 		for (const c of results) {
 			if (account.role === "client" && !planAllows(plan, c.kind)) continue;
+			// Phones get down and back up alerts only, sent grouped when the run ends (flushPhones).
+			if (isPhone(c.kind)) continue;
 			if (c.kind === "push" || c.kind === "apns") {
 				const r = c.kind === "apns" ? await appTo(env, account, c, e, monitorId, monitorId ?? undefined) : await pushTo(db, c, e, contact, monitorId ?? undefined);
 				sent.push(r === "sent" ? c.name : `${c.name} failed`);
@@ -112,6 +115,35 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 			if (fails !== c.fails) await db.prepare("UPDATE channels SET fails = ?, on_off = ? WHERE id = ?").bind(fails, fails >= MAX_FAILS ? 0 : 1, c.id).run();
 		}
 	}
-	await db.prepare("INSERT INTO alerts (account_id, at, monitor_id, subject, text, urgent, sent) VALUES (?, ?, ?, ?, ?, ?, ?)")
+	const saved = await db.prepare("INSERT INTO alerts (account_id, at, monitor_id, subject, text, urgent, sent) VALUES (?, ?, ?, ?, ?, ?, ?)")
 		.bind(account.id, iso(now), monitorId, alert.subject, alert.text, alert.urgent ? 1 : 0, sent.join(", ")).run();
+	const event = alert.type === "monitor.down" ? "down" : alert.type === "monitor.up" ? "up" : null;
+	if (event && monitorId && !sent.includes("held") && (account.role === "owner" || planAllows(plan, "sms"))) {
+		const row = await db.prepare("SELECT * FROM monitors WHERE id = ?").bind(monitorId).first<MonitorRow>();
+		const phones = await db.prepare("SELECT COUNT(*) AS n FROM channels WHERE account_id = ? AND on_off = 1 AND kind IN ('sms', 'whatsapp')").bind(account.id).first<{ n: number }>();
+		if (row && (phones?.n ?? 0) > 0) await queuePhone(db, account.id, saved.meta.last_row_id ?? null, { event, label: labelOf(row), at: iso(now) });
+	}
+}
+
+/** Sends the text message and WhatsApp alerts made in this run (see phones.ts). Call it when a run's checks are done. */
+export async function sendPhones(env: Env, now = new Date()): Promise<void> {
+	const db = env.DB;
+	const waiting = await db.prepare("SELECT 1 FROM phone_outbox WHERE claim IS NULL LIMIT 1").first().catch(() => null);
+	if (!waiting) return;
+	const inst = await install(db);
+	await flushPhones(db, env, {
+		account: (id) => accountById(db, id),
+		plan: (id) => planById(db, id),
+		link: inst.origin ? `${inst.origin}/` : "",
+		app: inst.brand.name,
+		ranOut: async (a: AccountRow, left: Allowance) => {
+			// Once a month: the phone alerts have run out, so email and app alerts carry on alone.
+			const key = `phones_out:${a.id}:${monthStart(now).slice(0, 7)}`;
+			if (!a.alert_to || !inst.alertFrom || (await getMeta(db, key))) return;
+			await setMeta(db, key, "1");
+			await sendEmail(env, inst.alertFrom, a.alert_to, `Your text and WhatsApp alerts have run out this month`,
+				`You've used all ${left.included ?? ""} text and WhatsApp alerts included with your plan this month, so we've held the latest one. Alerts carry on by email and on your devices as usual, and phone alerts start again on the 1st.\n\nNeed them sooner? Buy a top up on the Alerts page: ${inst.origin ?? ""}/#alerts`,
+				inst.brand.name, { brand: inst.brand, tone: "warn" });
+		},
+	}, now);
 }

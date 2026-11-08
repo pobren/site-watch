@@ -18,6 +18,7 @@ import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
 import { nameProblem, tidyName } from "./names.ts";
 import { addHostname, domainState, removeHostname, saasReady } from "./domains.ts";
+import { allowanceOf, canSend, cleanPhone, confirmCode, countriesOf, isPhone, MAX_PHONES, maskPhone, PHONE_NAMES, phonePacks, phoneReady, phoneSecretOf, sendCode, testPhone, type PhoneKind, type PhonePack } from "./phones.ts";
 
 /** Where a status page lives: name.PAGE_DOMAIN when the install has one, otherwise /status/name. */
 export function pageAddress(env: Env, origin: string, slug: string): string {
@@ -43,18 +44,18 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 }
 
 
-interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean; branding: boolean }
+interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean; branding: boolean; phoneAlerts: number | null }
 
 /** What an account may have. The owner has no limits here (the licence covers that, on trust); clients have their plan's. */
 async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
-	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true, branding: true };
+	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true, branding: true, phoneAlerts: null };
 	const plan = await planById(db, a.plan);
-	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1, branding: !!plan && plan.free !== 1 };
+	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1, branding: !!plan && plan.free !== 1, phoneAlerts: plan && plan.free !== 1 && (plan.channels ?? "all") === "all" ? plan.phone_alerts ?? 0 : 0 };
 }
 
-const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, push: "Browser alerts", apns: "App alerts" };
+const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, ...PHONE_NAMES, push: "Browser alerts", apns: "App alerts" };
 /** Where a channel sends, as the Alerts tab shows it. Push and app alerts don't show their secret addresses. */
-const whereOf = (c: { kind: string; url: string; name: string }) => (c.kind === "push" ? new URL(c.url).hostname : c.kind === "apns" ? "Apple" : maskUrl(c.url));
+const whereOf = (c: { kind: string; url: string; name: string }) => (c.kind === "push" ? new URL(c.url).hostname : c.kind === "apns" ? "Apple" : isPhone(c.kind) ? maskPhone(c.url) : maskUrl(c.url));
 
 async function everything(env: Env, me: AccountRow, origin: string) {
 	const db = env.DB;
@@ -71,7 +72,9 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
-		channels: chans.results.map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "push" || c.kind === "apns" ? null : c.secret, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
+		// Phones waiting for their code are listed under phones.pending, not here. Only webhooks show their secret.
+		channels: chans.results.filter((c) => !isPhone(c.kind) || phoneSecretOf(c.secret).verified).map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "webhook" ? c.secret : null, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
+		phones: await phonesState(env, me, chans.results, limits),
 		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug) })),
 		pageDomain: env.PAGE_DOMAIN?.toLowerCase() ?? null,
 		domainTarget: env.DOMAIN_TARGET?.toLowerCase() ?? null,
@@ -96,9 +99,25 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 			webhookUrl: `${origin}/stripe/webhook`, signupUrl: `${origin}/signup`, clients: clients.results, signupCap: await signupCap(db), queue: !!env.CHECKS,
 			plans: plans.results.map((p) => ({ ...publicPlan(p), stripePrice: p.stripe_price, stripePriceYear: p.stripe_price_year, priceYear: p.price_label_year, on: p.on_off === 1, position: p.position })),
 			licence: { websites: mons.results.filter((m) => m.kind === "website").length, limit: LICENCE_SITES },
+			phones: { ready: phoneReady(env), usFrom: !!env.TWILIO_SMS_FROM_US, countries: countriesOf(env), dailyMax: Number(env.PHONE_DAILY_MAX) || 250, packs: await phonePacks(db) },
 		};
 	}
 	return out;
+}
+
+/** The Alerts tab's text and WhatsApp card: what this install can send, what's left this month, phones waiting for a code. */
+async function phonesState(env: Env, me: AccountRow, chans: { id: number; kind: string; url: string; secret: string | null }[], limits: Limits) {
+	const ready = phoneReady(env);
+	const plan = me.role === "client" ? await planById(env.DB, me.plan) : null;
+	const a = await allowanceOf(env.DB, me, plan);
+	const packs = me.role === "client" && env.STRIPE_SECRET_KEY && limits.phoneAlerts ? (await phonePacks(env.DB)).map((p, i) => ({ i, alerts: p.alerts, label: p.label })) : [];
+	return {
+		ready, countries: countriesOf(env), usFrom: !!env.TWILIO_SMS_FROM_US,
+		included: a.included, used: a.used, credits: a.credits, creditsUntil: a.creditsUntil,
+		allowed: me.role === "owner" || (limits.phoneAlerts ?? 0) > 0 || a.credits > 0,
+		pending: chans.filter((c) => isPhone(c.kind) && !phoneSecretOf(c.secret).verified).map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind], where: maskPhone(c.url) })),
+		packs, max: MAX_PHONES,
+	};
 }
 
 async function body(request: Request): Promise<Record<string, unknown>> {
@@ -287,6 +306,36 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		return reply({ ok: true });
 	}
 
+	// -- Text message and WhatsApp alerts (phones.ts) --
+	if (path === "/api/phones" && method === "POST") {
+		const via = (b.via === "sms" ? "sms" : "whatsapp") as PhoneKind;
+		const plan = owner ? null : await planById(db, me.plan);
+		const left = await allowanceOf(db, me, plan);
+		if (!owner && !((limits.phoneAlerts ?? 0) > 0 || left.credits > 0)) return bad("Text and WhatsApp alerts aren't on your plan. Upgrade on the Account tab to add them.", 403);
+		const n = cleanPhone(b.number, countriesOf(env));
+		if ("error" in n) return bad(n.error);
+		if (!canSend(env, via, n.number)) return bad(via === "sms" ? "We can't send text messages to that number yet. Try WhatsApp instead." : "WhatsApp alerts aren't set up here yet.");
+		const mine = await db.prepare("SELECT id, kind, url FROM channels WHERE account_id = ? AND kind IN ('sms', 'whatsapp')").bind(me.id).all<{ id: number; kind: string; url: string }>();
+		const same = mine.results.find((c) => c.url === n.number && c.kind === via);
+		if (!same && mine.results.length >= MAX_PHONES) return bad(`That's ${MAX_PHONES} phones already. Remove one first.`);
+		const name = cleanName(b.name, 60) ?? `${PHONE_NAMES[via]} ending ${n.number.slice(-3)}`;
+		let id = same?.id;
+		if (!id) {
+			const r = await db.prepare("INSERT INTO channels (account_id, kind, name, url, secret, on_off, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)").bind(me.id, via, name, n.number, JSON.stringify({ verified: false }), iso(new Date())).run();
+			id = r.meta.last_row_id;
+		}
+		const problem = await sendCode(db, env, me.id, { id: id!, kind: via, url: n.number }, inst.brand.name);
+		if (problem && !same) await db.prepare("DELETE FROM channels WHERE id = ?").bind(id).run();
+		return problem ? bad(problem, 429) : reply({ ok: true, id });
+	}
+	const ph = /^\/api\/phones\/(\d+)\/(code|confirm)$/.exec(path);
+	if (ph && method === "POST") {
+		const c = await db.prepare("SELECT id, kind, url, secret FROM channels WHERE id = ? AND account_id = ? AND kind IN ('sms', 'whatsapp')").bind(Number(ph[1]), me.id).first<{ id: number; kind: string; url: string; secret: string | null }>();
+		if (!c) return bad("We couldn't find that phone.", 404);
+		const problem = ph[2] === "code" ? await sendCode(db, env, me.id, c, inst.brand.name) : await confirmCode(db, c, b.code);
+		return problem ? bad(problem) : reply({ ok: true });
+	}
+
 	// -- Alert channels --
 	if (path === "/api/channels" && method === "POST") {
 		const c = cleanChannel(b);
@@ -305,6 +354,11 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			await db.prepare("DELETE FROM channels WHERE id = ?").bind(c.id).run();
 			return reply();
 		}
+		if (ch[2] && isPhone(c.kind)) {
+			const row = await db.prepare("SELECT id, kind, name, url, secret, fails FROM channels WHERE id = ?").bind(c.id).first<{ id: number; kind: string; name: string; url: string; secret: string | null; fails: number }>();
+			const problem = await testPhone(db, env, me, owner ? null : await planById(db, me.plan), row!, ctx.link, inst.brand.name);
+			return problem ? bad(problem, 429) : reply({ ok: true });
+		}
 		if (ch[2]) {
 			const test = { event: "test" as const, subject: `Test alert from ${inst.brand.name}`, text: `If you can read this, ${inst.brand.name} alerts will arrive here.`, urgent: false, url: ctx.link, sentAt: iso(new Date()), app: inst.brand.name };
 			if (c.kind === "apns") {
@@ -321,6 +375,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if (ok) await db.prepare("UPDATE channels SET fails = 0, on_off = 1 WHERE id = ?").bind(c.id).run();
 			return ok ? reply({ ok: true }) : bad(`${c.name} didn't accept the test. Check the address is right and still switched on in ${CHANNEL_NAMES[c.kind as keyof typeof CHANNEL_NAMES] ?? "the service"}.`, 502);
 		}
+		if ("on" in b && b.on && isPhone(c.kind) && !phoneSecretOf(c.secret).verified) return bad("Confirm this phone with its code first.");
 		if ("on" in b) await db.prepare("UPDATE channels SET on_off = ?, fails = 0 WHERE id = ?").bind(b.on ? 1 : 0, c.id).run();
 		return reply();
 	}
@@ -535,6 +590,20 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		await setMeta(db, "brand", JSON.stringify(brand));
 		return reply({ ok: true });
 	}
+	if (path === "/api/admin/phones" && method === "POST") {
+		const raw = Array.isArray(b.packs) ? b.packs.slice(0, 4) : [];
+		const packs: PhonePack[] = [];
+		for (const x of raw as Record<string, unknown>[]) {
+			const alerts = Number(x.alerts), price = String(x.price ?? "").trim(), label = cleanName(x.label, 40);
+			if (!alerts && !price) continue;
+			if (!Number.isInteger(alerts) || alerts < 1 || alerts > 10_000) return bad("Each top up needs a number of alerts, between 1 and 10,000.");
+			if (!/^price_[A-Za-z0-9]+$/.test(price)) return bad("A Stripe price ID starts with price_. Make a one off price in Stripe and paste its ID.");
+			if (!label) return bad("Give each top up its price text, such as £5, so people see what it costs.");
+			packs.push({ alerts, price, label });
+		}
+		await setMeta(db, "phone_packs", JSON.stringify(packs));
+		return reply({ ok: true });
+	}
 	if (path === "/api/admin/plans" && method === "POST") {
 		const name = cleanName(b.name, 40);
 		if (!name) return bad("Please give the plan a name, such as Small business.");
@@ -551,11 +620,13 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const perDay = b.alertsPerDay === "" || b.alertsPerDay === null || b.alertsPerDay === undefined ? null : num(b.alertsPerDay, 1, 1000);
 		if (perDay === null && b.alertsPerDay !== "" && b.alertsPerDay !== null && b.alertsPerDay !== undefined) return bad("Please choose between 1 and 1,000 alerts a day, or leave it empty for no limit.");
 		const channels = ["email", "push", "all"].includes(String(b.channels)) ? String(b.channels) : "all";
+		const phoneAlerts = b.phoneAlerts === "" || b.phoneAlerts === undefined || b.phoneAlerts === null ? 0 : num(b.phoneAlerts, 0, 10_000);
+		if (phoneAlerts === null) return bad("Please choose between 0 and 10,000 text and WhatsApp alerts a month.");
 		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
-			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null];
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);
