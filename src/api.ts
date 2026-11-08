@@ -43,13 +43,13 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 }
 
 
-interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean }
+interface Limits { monitors: number | null; minEvery: number; pages: number | null; channels: "email" | "push" | "all"; alertsPerDay: number | null; ownDomain: boolean; branding: boolean }
 
 /** What an account may have. The owner has no limits here (the licence covers that, on trust); clients have their plan's. */
 async function limitsOf(db: D1Database, a: AccountRow): Promise<Limits> {
-	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true };
+	if (a.role === "owner") return { monitors: null, minEvery: 1, pages: null, channels: "all", alertsPerDay: null, ownDomain: true, branding: true };
 	const plan = await planById(db, a.plan);
-	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1 };
+	return { monitors: plan?.monitors ?? 0, minEvery: plan?.min_every ?? 5, pages: plan?.pages ?? 0, channels: plan?.channels ?? "all", alertsPerDay: plan?.alerts_per_day ?? null, ownDomain: !!plan && plan.free !== 1, branding: !!plan && plan.free !== 1 };
 }
 
 const KIND_NAMES: Record<string, string> = { ...CHANNEL_NAMES, push: "Browser alerts", apns: "App alerts" };
@@ -392,6 +392,8 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		if (problem) return bad(problem);
 		const intro = typeof b.intro === "string" ? b.intro.trim().slice(0, 500) || null : null;
 		// The page's own logo: left out keeps what's there, empty removes it.
+		// Logo, colour and contact come with Pro: on other plans they're left as they are.
+		if (!limits.branding) { delete b.logo; delete b.support; delete b.colour; }
 		const logo = b.logo === undefined ? undefined : cleanLogo(b.logo);
 		if (logo && typeof logo === "object") return bad(logo.error);
 		// Who visitors contact (the customer, never us) and the page's colour: left out keeps what's there.

@@ -4,7 +4,7 @@
 
 - Status page notices show a Live or Resolved tag and their kind, when they started and, once over, when they were resolved and how long they lasted.
 - Each status page can have its own logo (PNG, JPEG, WebP or SVG, up to 100 KB), shown beside its name.
-- Each status page has its own contact address and colour. Pages no longer show the install's support address, so visitors contact the page's owner, and the foot says "Monitored by" the install's name, linked to its home page.
+- With Pro (or any plan that isn't free), each status page has its own logo, contact address and colour. Pages no longer show the install's support address, so visitors contact the page's owner, and the foot says "Monitored by" the install's name, linked to its home page.
 
 ## 1.6.2
 

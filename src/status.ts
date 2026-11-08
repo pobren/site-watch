@@ -2,7 +2,7 @@
 // Each shows whether things are working now, 90 days of daily uptime bars, and any notices.
 
 import { overall, shownOf, statusOf, stateOf, uptime, dailyBars, iso, type Shown } from "./core.ts";
-import { install, isLive, accountById, type MonitorRow } from "./db.ts";
+import { install, isLive, accountById, hasPro, type MonitorRow } from "./db.ts";
 
 interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; logo?: string | null; support?: string | null; colour?: string | null }
 interface NoticeRow { id: number; title: string; body: string; impact: string; created_at: string; resolved_at: string | null }
@@ -63,6 +63,8 @@ export async function renderStatus(db: D1Database, page: PageRow): Promise<Respo
 	const account = await accountById(db, page.account_id);
 	if (!account || !isLive(account)) return new Response("This status page isn't available.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
 	const d = await statusData(db, page);
+	// Logo, colour and contact are Pro: a page on a free plan shows none of them.
+	if (!(await hasPro(db, account))) { d.logo = null; d.support = null; d.colour = null; }
 	const { brand, origin } = await install(db);
 	const colour: Record<Shown, string> = { up: "#15803d", down: "#b91c1c", degraded: "#b45309", maintenance: "#1d4ed8", unknown: "#64748b" };
 	const kindColour = (n: NoticeRow) => n.impact === "maintenance" ? colour.maintenance : n.impact === "major" ? colour.down : colour.degraded;
