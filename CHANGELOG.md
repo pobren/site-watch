@@ -3,6 +3,7 @@
 ## 1.6.3
 
 - Status page notices show a Live or Resolved tag and their kind, when they started and, once over, when they were resolved and how long they lasted.
+- Each status page can have its own logo (PNG, JPEG, WebP or SVG, up to 100 KB), shown beside its name.
 
 ## 1.6.2
 

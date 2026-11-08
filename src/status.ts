@@ -4,7 +4,7 @@
 import { overall, shownOf, statusOf, stateOf, uptime, dailyBars, iso, type Shown } from "./core.ts";
 import { install, isLive, accountById, type MonitorRow } from "./db.ts";
 
-interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string }
+interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; logo?: string | null }
 interface NoticeRow { id: number; title: string; body: string; impact: string; created_at: string; resolved_at: string | null }
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -44,7 +44,7 @@ export async function statusData(db: D1Database, page: PageRow, now = new Date()
 	let all = overall(items.map((i) => i.state));
 	if (open.some((n) => n.impact === "major") && all.state === "up") all = { state: "degraded", text: "Some problems" };
 	else if (open.some((n) => n.impact === "maintenance") && all.state === "up") all = { state: "maintenance", text: "Maintenance under way" };
-	return { title: page.title, intro: page.intro, overall: all, items, notices, updated: iso(now) };
+	return { title: page.title, intro: page.intro, logo: page.logo ?? null, overall: all, items, notices, updated: iso(now) };
 }
 
 /** How long a notice was up, in words: "under a minute", "35 minutes", "2 hours 10 minutes", "3 days 4 hours". */
@@ -82,7 +82,7 @@ export async function renderStatus(db: D1Database, page: PageRow): Promise<Respo
 :root{--brand:${esc(brand.colour)};--ink:#0f172a;--soft:#475569;--line:#e2e8f0;--bg:#f8fafc}
 *{box-sizing:border-box}body{margin:0;font:16px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg)}
 main{max-width:860px;margin:0 auto;padding:32px 16px 48px}
-header{display:flex;align-items:center;gap:12px;margin-bottom:20px}header img{height:40px;width:auto}
+header{display:flex;align-items:center;gap:14px;margin-bottom:20px}header img{height:48px;width:auto;max-width:200px;object-fit:contain}
 h1{font-size:28px;margin:0;line-height:1.2}.intro{color:var(--soft);margin:0 0 20px}
 .banner{display:flex;align-items:center;gap:12px;padding:20px;border-radius:14px;color:#fff;font-size:22px;font-weight:700;margin-bottom:24px}
 .banner svg{flex:none}
@@ -97,7 +97,7 @@ h1{font-size:28px;margin:0;line-height:1.2}.intro{color:var(--soft);margin:0 0 2
 h2{font-size:20px;margin:28px 0 12px}footer{margin-top:32px;color:var(--soft);font-size:14px;text-align:center}footer a{color:inherit}
 @media(max-width:560px){.bars i:nth-child(-n+60){display:none}.span90{display:none}.span30{display:inline!important}}
 </style></head><body><main>
-<header>${brand.logo ? `<img src="${esc(brand.logo)}" alt="">` : ""}<h1>${esc(d.title)}</h1></header>
+<header>${d.logo || brand.logo ? `<img src="${esc((d.logo || brand.logo)!)}" alt="">` : ""}<h1>${esc(d.title)}</h1></header>
 ${d.intro ? `<p class="intro">${esc(d.intro)}</p>` : ""}
 <div class="banner" style="background:${colour[d.overall.state]}">${d.overall.state === "up"
 		? '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>'

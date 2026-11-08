@@ -182,8 +182,9 @@ const COLUMNS = [
 	"ALTER TABLE accounts ADD COLUMN live_alerts INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE accounts ADD COLUMN live_expires TEXT",
 	"ALTER TABLE pages ADD COLUMN cf_host_id TEXT",
+	"ALTER TABLE pages ADD COLUMN logo TEXT",
 ];
-const SCHEMA_VERSION = "6";
+const SCHEMA_VERSION = "7";
 
 let ready: Promise<void> | null = null;
 
