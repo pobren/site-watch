@@ -1,5 +1,9 @@
 # Changes
 
+## 1.6.0: Live view link
+
+- **Watch somewhere else.** Make a private Live view link from an app (or POST /api/live-link) and open it on an office TV, a second screen or a tablet. It shows every check on one dark screen, worst first, with a clock, and refreshes itself every minute. No sign in needed, so it shows names and states only, never server addresses or alert wording. Make a new link to stop the old one working, or turn it off (DELETE /api/live-link).
+
 ## 1.5.0: Apps on phones and computers
 
 - **Sign in on an app.** Apps sign in with an email address and password, or by scanning a QR code from **Sign in on your phone** on the Account tab. The code works once, for 5 minutes. Each app gets its own key and works with the same API as the website.

@@ -7,6 +7,7 @@
 //   /mcp                 the AI connector (mcp.ts), with its OAuth sign-in (connect.ts, oauth.ts)
 //   /hb/<code>           a scheduled job checking in (no sign-in: the code is the secret)
 //   /status/<address>    public status pages (status.ts), or / on a status page's own domain
+//   /live/<link>         the private Live view link (live.ts): every check on one dark screen
 //   /stripe/webhook      Stripe, when selling to clients is on (billing.ts)
 //   /sw.js               the service worker that shows browser alerts (push.ts)
 //   /api/app/*           apps on phones and computers: sign-in, QR codes and alerts through Apple (apps.ts, apns.ts)
@@ -24,10 +25,11 @@ import { SERVICE_WORKER } from "./push.ts";
 import { configure, WL } from "./whitelabel.ts";
 import { handleConnector, isConnectorPath } from "./connect.ts";
 import { findPage, renderStatus } from "./status.ts";
+import { renderLive } from "./live.ts";
 import { handleV1 } from "./v1.ts";
 import { appPage, connectPage } from "./ui.ts";
 
-const VERSION = "1.5.0";
+const VERSION = "1.6.0";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -96,6 +98,9 @@ export default {
 		if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
 		const page = await findPage(env.DB, path, url.hostname);
 		if (page) return withHeaders(await renderStatus(env.DB, page), { "x-frame-options": "SAMEORIGIN" });
+
+		const live = /^\/live\/([0-9a-f]{32})\/?$/.exec(path);
+		if (live) return withHeaders(await renderLive(env.DB, live[1]));
 
 		// The QR code on the Account tab holds this address. The app reads it; a phone's camera opens the app here once
 		// it's installed (universal links), or this page, which says what to do.
