@@ -1,5 +1,9 @@
 # Changes
 
+## 1.6.3
+
+- Status page notices show a Live or Resolved tag and their kind, when they started and, once over, when they were resolved and how long they lasted.
+
 ## 1.6.2
 
 - The status page name checker and the own domain wizard's progress check answered "Not found": they now work.
