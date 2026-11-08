@@ -76,7 +76,7 @@ input[type=checkbox]{width:auto;margin-right:8px;transform:scale(1.2)}
 .kind{display:inline-block;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--soft);background:#f1f5f9;border-radius:6px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .more{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:8px}
-.tile{border:2px solid var(--line);background:#fff;border-radius:16px;padding:16px;text-align:left;font:inherit;cursor:pointer}
+.tile{border:2px solid var(--line);background:#fff;border-radius:16px;padding:16px;text-align:left;font:inherit;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-start;align-items:flex-start;gap:6px}
 .tile b{display:flex;align-items:center;gap:8px;font-size:18px}.tile span{color:var(--soft);font-size:14px}
 .tile.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 6%,#fff)}
 .copy{display:flex;gap:8px}.copy input{font-family:ui-monospace,Menlo,monospace;font-size:14px}

@@ -1,5 +1,9 @@
 # Changes
 
+## 1.8.1
+
+- The four choices on the Add page (Website, Mail server, Port, Heartbeat) line up at the top, so the chosen one no longer sits lower than the rest.
+
 ## 1.8.0: Checks every 30 seconds
 
 - **Every 30 seconds** is a new choice for websites, mail servers and ports. The minute's run checks them, and a queue message held back half a minute checks them again. Without a queue (CHECKS) they're checked every minute.

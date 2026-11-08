@@ -29,7 +29,7 @@ import { renderLive } from "./live.ts";
 import { handleV1 } from "./v1.ts";
 import { appPage, connectPage } from "./ui.ts";
 
-const VERSION = "1.8.0";
+const VERSION = "1.8.1";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
