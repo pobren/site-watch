@@ -3,6 +3,7 @@
 ## 1.8.1
 
 - The four choices on the Add page (Website, Mail server, Port, Heartbeat) line up at the top, so the chosen one no longer sits lower than the rest.
+- Each alert channel on the Alerts tab has its own coloured icon (text messages, WhatsApp, Apple app, browser, Slack, Teams, Google Chat, Discord, webhook), so the list is easier to scan.
 
 ## 1.8.0: Checks every 30 seconds
 
