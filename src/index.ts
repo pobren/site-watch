@@ -16,7 +16,7 @@
 // Every minute the cron (cron.ts) checks whatever is due, itself or through a Cloudflare Queue on big installs.
 // With static files (the ASSETS binding), people who aren't signed in see the home page at / instead of sign-in.
 
-import { deliver } from "./alerts.ts";
+import { deliver, sendPhones } from "./alerts.ts";
 import { handleApi } from "./api.ts";
 import { contextOf, runQueue, runScheduled } from "./cron.ts";
 import { alertFor, iso, isDown, step, stateOf } from "./core.ts";
@@ -29,7 +29,7 @@ import { renderLive } from "./live.ts";
 import { handleV1 } from "./v1.ts";
 import { appPage, connectPage } from "./ui.ts";
 
-const VERSION = "1.6.2";
+const VERSION = "1.7.0";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -60,6 +60,7 @@ async function heartbeat(env: Env, token: string, ctx: ExecutionContext): Promis
 			await env.DB.prepare("UPDATE monitors SET state = ?, checked_at = ? WHERE id = ?").bind(JSON.stringify(next), iso(now), row.id).run();
 			const c = await contextOf(env);
 			for (const e of events) await deliver(env, account, alertFor(row, e, account.tz, c.link, c.app), row.id, now);
+			await sendPhones(env, now);
 		})());
 	}
 	return new Response("OK\n", { headers: { "content-type": "text/plain", "cache-control": "no-store" } });
@@ -144,11 +145,13 @@ export default {
 
 	async scheduled(controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
 		configure(env);
-		ctx.waitUntil(runScheduled(env, controller.scheduledTime));
+		// Text and WhatsApp alerts made during the run go out at its end, grouped (phones.ts).
+		ctx.waitUntil(runScheduled(env, controller.scheduledTime).finally(() => sendPhones(env).catch((e) => console.error("phone alerts failed", e))));
 	},
 
 	async queue(batch: MessageBatch<CheckBatch>, env: Env): Promise<void> {
 		configure(env);
 		await runQueue(env, batch.messages);
+		await sendPhones(env).catch((e) => console.error("phone alerts failed", e));
 	},
 } satisfies ExportedHandler<Env, CheckBatch>;

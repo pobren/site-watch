@@ -178,4 +178,5 @@ async function tidy(db: D1Database, now: Date): Promise<void> {
 	if (now.getUTCMinutes() !== 7) return;
 	await db.prepare(`DELETE FROM alerts WHERE id IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY account_id ORDER BY id DESC) AS n FROM alerts) WHERE n > ${KEEP_ALERTS})`).run();
 	await db.prepare("DELETE FROM signups WHERE at < ?").bind(minutesAgo(now, 24 * 60)).run();
+	await db.prepare("DELETE FROM phone_sends WHERE at < ?").bind(minutesAgo(now, 45 * 24 * 60)).run();
 }
