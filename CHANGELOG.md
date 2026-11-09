@@ -8,6 +8,7 @@
 - **Plans** set email subscribers, subscriber emails a month and chat rooms (Admin tab). Free plans have none. If a month's emails would run out, the oldest subscribers still get them and the rest are skipped until next month.
 - **Amazon SES** sends subscriber emails when `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY` and `SES_REGION` are set. Big lists are sent in batches through the CHECKS queue.
 - Status pages now reload without losing what you're typing in the subscribe form.
+- Plans and limits now say "monitors": each web address, API, DNS record, mail server, port or job is one.
 
 ## 1.10.0: API and DNS checks
 

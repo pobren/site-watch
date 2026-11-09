@@ -277,7 +277,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		if (limits.monitors !== null) {
 			const n = await db.prepare("SELECT COUNT(*) AS n FROM monitors WHERE account_id = ?").bind(me.id).first<{ n: number }>();
-			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan watches up to ${limits.monitors === 1 ? "1 thing" : `${limits.monitors} things`}. Remove one first, or upgrade on the Account tab.`, 403);
+			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan includes ${limits.monitors === 1 ? "1 monitor" : `${limits.monitors} monitors`}. Remove one first, or upgrade on the Account tab.`, 403);
 		}
 		const dup = await db.prepare("SELECT 1 FROM monitors WHERE account_id = ? AND kind = ? AND kind != 'heartbeat' AND COALESCE(url, '') = COALESCE(?, '') AND COALESCE(host, '') = COALESCE(?, '') AND COALESCE(port, 0) = COALESCE(?, 0)")
 			.bind(me.id, row.kind, row.url, row.host, row.port).first();
@@ -696,7 +696,7 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const monitors = num(b.monitors, 1, 10_000);
 		const pages = num(b.pages, 0, 100);
 		const minEvery = CHECK_EVERY.includes(Number(b.minEvery)) && Number(b.minEvery) >= 1 ? Number(b.minEvery) : null;
-		if (monitors === null || pages === null || minEvery === null) return bad("Please fill in what the plan includes: things to watch, how often and status pages.");
+		if (monitors === null || pages === null || minEvery === null) return bad("Please fill in what the plan includes: monitors, how often and status pages.");
 		const priceId = (x: unknown) => (typeof x === "string" && x.trim() ? x.trim() : null);
 		const free = b.free === true;
 		const price = free ? null : priceId(b.stripePrice);
