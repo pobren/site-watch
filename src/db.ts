@@ -44,6 +44,9 @@ export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 	SES_ACCESS_KEY_ID?: string;
 	SES_SECRET_ACCESS_KEY?: string;
 	SES_REGION?: string;
+	/** Optional: the domain whose email Cloudflare Email Routing sends to this Worker, for posting notices by email
+	 *  (update-<token>@UPDATE_DOMAIN, extras.ts). */
+	UPDATE_DOMAIN?: string;
 }
 
 /** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */
@@ -80,6 +83,9 @@ export interface MonitorRow {
 export interface AccountRow {
 	id: string;
 	email: string;
+	/** 1.12.0: 1 for the monthly uptime report (paid plans), and the last month sent. */
+	reports?: number;
+	report_month?: string | null;
 	name: string | null;
 	password: string | null;
 	role: "owner" | "client";
@@ -138,6 +144,8 @@ export interface PlanRow {
 	subscribers?: number;
 	sub_emails?: number;
 	sub_hooks?: number;
+	/** 1.12.0: 1 when status pages may have a password. */
+	locked?: number;
 }
 
 const SCHEMA = [
@@ -234,8 +242,15 @@ const COLUMNS = [
 	"ALTER TABLE plans ADD COLUMN sub_hooks INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE pages ADD COLUMN auto_notify INTEGER NOT NULL DEFAULT 1",
 	"ALTER TABLE pages ADD COLUMN subscribe INTEGER NOT NULL DEFAULT 1",
+	// 1.12.0: password protected pages, posting notices by email and the monthly report (extras.ts).
+	"ALTER TABLE plans ADD COLUMN locked INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE pages ADD COLUMN password TEXT",
+	"ALTER TABLE pages ADD COLUMN mail_token TEXT",
+	"ALTER TABLE accounts ADD COLUMN reports INTEGER NOT NULL DEFAULT 1",
+	"ALTER TABLE accounts ADD COLUMN report_month TEXT",
+	"CREATE UNIQUE INDEX IF NOT EXISTS pages_mail_token ON pages (mail_token)",
 ];
-const SCHEMA_VERSION = "10";
+const SCHEMA_VERSION = "11";
 
 let ready: Promise<void> | null = null;
 

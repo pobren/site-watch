@@ -43,6 +43,22 @@ Subscriber emails go through Amazon SES when these Worker secrets are set, as SE
 
 The sending address (the one alerts come from) must be verified in SES. Without these secrets, subscriber emails go through the Cloudflare email binding like alerts.
 
+### Badge, widget and password
+
+Each public status page has a badge (`/status/<address>/badge.svg`) and a small widget for an iframe (`/status/<address>/widget`) that people can put on their own website. The Status pages tab gives the code to copy.
+
+On plans that allow it (Admin tab, "Status pages can have a password"), a page can have a password so only staff or a client can see it. Visitors type it once every 30 days. Private pages have no badge, widget or feed, and search engines are asked not to list them.
+
+### Posting notices by email
+
+Turn on "Post notices by email" for a page and it gets a private address, such as `update-1a2b...@updates.example.com`. Anything the account's own email address sends there becomes a notice and goes to subscribers. Start the subject with `Maintenance:` or `Major:` to set the type, or `Resolved` to close the latest notice.
+
+To set it up, add a subdomain to Cloudflare Email Routing (such as updates.example.com), send all of its email to this Worker with a catch-all rule, and set the Worker variable `UPDATE_DOMAIN` to that subdomain.
+
+### Monthly uptime report
+
+On the first of each month, paid accounts get an email with last month's uptime and outages for each monitor. People can turn it off on the Account tab.
+
 ## API, webhooks and AI connector
 
 Full guide: [paulobrien.dev/watch/api](https://paulobrien.dev/watch/api/). The same rules as Mail App, ReaderCount and DMARC Reports.

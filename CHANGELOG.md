@@ -1,5 +1,13 @@
 # Changes
 
+## 1.12.0: Badge, private pages, notices by email and monthly reports
+
+- **Status badge and widget** for people's own websites, on every plan, with the code to copy on the Status pages tab.
+- **Password protected status pages** for staff or clients only, on plans that allow them ("Status pages can have a password" on the Admin tab's plan form).
+- **Post notices by email**: each page can have a private address. Email it from your own address and it's posted and sent to subscribers. Needs `UPDATE_DOMAIN` and Cloudflare Email Routing (see the README).
+- **Monthly uptime report** by email on the first of each month for paid accounts, with uptime and outages for each monitor. It can be turned off on the Account tab.
+- Deleting a status page or an account now removes its subscribers too.
+
 ## 1.11.0: Status page subscribers
 
 - **Visitors can subscribe** to a status page by email, Slack, Discord, Microsoft Teams, Google Chat, webhook or Atom feed, for everything on the page or only the things they pick. Emails are confirmed by a link first and every email has a one click unsubscribe.

@@ -2,19 +2,20 @@
 // Each account sees only its own things; the owner also gets the Admin routes (branding, plans, clients).
 
 import { REGIONS } from "./probe.ts";
+import { canLock, updateAddress } from "./extras.ts";
 import { emailsThisMonth, HOOK_NAMES, subLimits, tellSubscribers } from "./subscribers.ts";
 import { appTo, deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
 import { apnsReady } from "./apns.ts";
 import { deleteAccount, handleApps, listApps } from "./apps.ts";
 import { handleAuth, json } from "./api-auth.ts";
-import { currentAccount } from "./auth.ts";
+import { currentAccount, hashPassword } from "./auth.ts";
 import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
 	CHANNEL_NAMES, cleanApiRules, cleanDnsRules, DNS_TYPES, API_METHODS, type ApiRules, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
 	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
-import { DEFAULT_BRAND, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { DEFAULT_BRAND, hasPro, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { cleanSub, vapidKeys } from "./push.ts";
 import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
@@ -86,7 +87,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 	const [mons, chans, pages, notices, alerts, inst, limits] = await Promise.all([
 		db.prepare("SELECT * FROM monitors WHERE account_id = ? ORDER BY created_at, id").bind(me.id).all<MonitorRow>(),
 		db.prepare("SELECT id, kind, name, url, secret, on_off, fails FROM channels WHERE account_id = ? ORDER BY id").bind(me.id).all<{ id: number; kind: string; name: string; url: string; secret: string | null; on_off: number; fails: number }>(),
-		db.prepare("SELECT * FROM pages WHERE account_id = ? ORDER BY created_at").bind(me.id).all<{ id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string }>(),
+		db.prepare("SELECT * FROM pages WHERE account_id = ? ORDER BY created_at").bind(me.id).all<{ id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; password?: string | null; mail_token?: string | null }>(),
 		db.prepare("SELECT n.* FROM notices n JOIN pages p ON p.id = n.page_id WHERE p.account_id = ? AND (n.resolved_at IS NULL OR n.resolved_at > ?) ORDER BY n.created_at DESC").bind(me.id, iso(new Date(Date.now() - 14 * 86_400_000))).all(),
 		db.prepare("SELECT id, at, monitor_id, subject, text, urgent, sent FROM alerts WHERE account_id = ? ORDER BY id DESC LIMIT 50").bind(me.id).all(),
 		install(db),
@@ -94,13 +95,16 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 	]);
 	const subCounts = new Map((await db.prepare("SELECT page_id, COUNT(*) AS n FROM subscribers WHERE account_id = ? AND confirmed_at IS NOT NULL GROUP BY page_id").bind(me.id).all<{ page_id: string; n: number }>()).results.map((r) => [r.page_id, r.n]));
 	const out: Record<string, unknown> = {
-		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null },
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null, reports: me.reports !== 0 },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		// Phones waiting for their code are listed under phones.pending, not here. Only webhooks show their secret.
 		channels: chans.results.filter((c) => !isPhone(c.kind) || phoneSecretOf(c.secret).verified).map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "webhook" ? c.secret : null, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
 		phones: await phonesState(env, me, chans.results, limits),
-		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug), subscribers: subCounts.get(p.id as string) ?? 0 })),
+		// Never the password's hash: only whether there is one, and the address for posting notices by email.
+		pages: pages.results.map(({ password, mail_token, ...p }) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug), subscribers: subCounts.get(p.id as string) ?? 0, locked: !!password, updateEmail: updateAddress(env, { mail_token }), badge: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/badge.svg`, widget: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/widget` })),
+		// Extras on this plan: password protected pages, and whether this install takes notices by email.
+		extras: { lock: await canLock(db, me), emailUpdates: !!env.UPDATE_DOMAIN, reports: await hasPro(db, me) },
 		// Status page subscribers: the plan's limits and this month's emails (subscribers.ts).
 		subs: { ...(await subLimits(db, me)), used: await emailsThisMonth(db, me.id), viaSes: !!env.SES_ACCESS_KEY_ID },
 		pageDomain: env.PAGE_DOMAIN?.toLowerCase() ?? null,
@@ -458,6 +462,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		const name = "name" in b ? cleanName(b.name, 80) : me.name;
 		await db.prepare("UPDATE accounts SET alert_to = ?, tz = ?, alerts_per_day = ?, name = ? WHERE id = ?").bind(alertTo, tz, perDay, name, me.id).run();
+		if (typeof b.reports === "boolean") { await db.prepare("UPDATE accounts SET reports = ? WHERE id = ?").bind(b.reports ? 1 : 0, me.id).run(); me.reports = b.reports ? 1 : 0; }
 		Object.assign(me, { alert_to: alertTo, tz, alerts_per_day: perDay, name });
 		return reply({ ok: true });
 	}
@@ -538,6 +543,15 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			// Subscribers: whether the page takes them, and whether things going down and back up are sent automatically.
 			if (typeof b.subscribe === "boolean") await db.prepare("UPDATE pages SET subscribe = ? WHERE id = ?").bind(b.subscribe ? 1 : 0, id).run();
 			if (typeof b.autoNotify === "boolean") await db.prepare("UPDATE pages SET auto_notify = ? WHERE id = ?").bind(b.autoNotify ? 1 : 0, id).run();
+			// A password (plans that allow it), and the private address for posting notices by email.
+			if (typeof b.password === "string" && b.password) {
+				if (!(await canLock(db, me))) return bad("Password protected status pages aren't on your plan. Upgrade on the Account tab to add them.", 403);
+				if (b.password.length < 8 || b.password.length > 200) return bad("Please choose a page password of at least 8 characters.");
+				await db.prepare("UPDATE pages SET password = ? WHERE id = ?").bind(await hashPassword(b.password), id).run();
+			}
+			if (b.removePassword === true) await db.prepare("UPDATE pages SET password = NULL WHERE id = ?").bind(id).run();
+			if (b.mailUpdates === true) await db.prepare("UPDATE pages SET mail_token = ? WHERE id = ?").bind(newId(12), id).run();
+			if (b.mailUpdates === false) await db.prepare("UPDATE pages SET mail_token = NULL WHERE id = ?").bind(id).run();
 		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, support, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, support ?? null, colour ?? null, iso(new Date())).run();
 		return reply({ ok: true });
 	}
@@ -604,7 +618,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		if (method === "DELETE") {
 			const cfId = await db.prepare("SELECT cf_host_id FROM pages WHERE id = ?").bind(pg[1]).first<string>("cf_host_id");
 			await removeHostname(env, cfId);
-			await db.batch([db.prepare("DELETE FROM notices WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM pages WHERE id = ?").bind(pg[1])]);
+			await db.batch([db.prepare("DELETE FROM notices WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM subscribers WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM pages WHERE id = ?").bind(pg[1])]);
 			return reply();
 		}
 		if (pg[2]) {
@@ -713,10 +727,10 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const subscribers = opt(b.subscribers, 1_000_000), subEmails = opt(b.subEmails, 10_000_000), subHooks = opt(b.subHooks, 10_000);
 		if (subscribers === null || subEmails === null || subHooks === null) return bad("Please give the subscriber limits as whole numbers, from 0 up.");
 		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
-			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks];
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks, !free && b.locked === true ? 1 : 0];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ?, locked = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, locked, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);

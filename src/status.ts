@@ -5,7 +5,7 @@ import { overall, shownOf, statusOf, stateOf, uptime, dailyBars, iso, type Shown
 import { install, isLive, accountById, hasPro, type MonitorRow } from "./db.ts";
 import { subLimits } from "./subscribers.ts";
 
-interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; logo?: string | null; support?: string | null; colour?: string | null; subscribe?: number }
+interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; logo?: string | null; support?: string | null; colour?: string | null; subscribe?: number; password?: string | null; mail_token?: string | null }
 interface NoticeRow { id: number; title: string; body: string; impact: string; created_at: string; resolved_at: string | null }
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);

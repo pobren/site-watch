@@ -3,6 +3,7 @@
 // minute). Once a day each
 // website's certificate and domain renewal date are looked up too, with reminders before either runs out.
 
+import { monthlyReports } from "./extras.ts";
 import { deliver } from "./alerts.ts";
 import { checkJob, lookupCert, lookupRegistration, type Result } from "./checks.ts";
 import {
@@ -179,6 +180,7 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 		).bind(minutesAgo(now, 24 * 60)).all<{ id: string }>();
 		if (daily.length) await enqueue(env, daily.map((r) => r.id), { daily: true, at: now.getTime() }, "daily_at");
 		await tidy(db, now);
+		await reports(env, now);
 		return;
 	}
 	await inBatches(due, AT_ONCE, async (row) => {
@@ -195,6 +197,13 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 	}
 
 	await tidy(db, now);
+	await reports(env, now);
+}
+
+/** Last month's uptime reports, every 10 minutes in the first three days of the month (extras.ts). */
+async function reports(env: Env, now: Date): Promise<void> {
+	if (now.getUTCMinutes() % 10 !== 3) return;
+	await monthlyReports(env, now).catch((e) => console.error("monthly reports", e));
 }
 
 /** Once an hour: old alerts beyond the last 500 an account, and sign-up records older than a day. */
