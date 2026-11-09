@@ -1,5 +1,12 @@
 # Changes
 
+## 1.15.1: Apps catch up
+
+- The choices on the Add page line up at the top, so the chosen one no longer sits lower than the rest.
+- Each alert channel on the Alerts tab has its own coloured icon (text messages, WhatsApp, Apple app, browser, Slack, Teams, Google Chat, Discord, webhook), so the list is easier to scan.
+- People who upgrade get a "You're now on Pro" note on their Site Patrol apps.
+- Team logins can sign in to the apps too: viewers look only, admins as on the website.
+
 ## 1.15.0: Dashboard extras and planned maintenance
 
 - **What we saw**: when a website or API check fails, the dashboard keeps what it answered: the status, a few headers and the start of the page.

@@ -6,7 +6,7 @@
 // Secrets on the Worker: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET. The webhook address is /stripe/webhook.
 // Optional variable STRIPE_MANAGED_PAYMENTS = "on": Stripe sells as merchant of record (Stripe Managed Payments).
 
-import { sendEmail } from "./alerts.ts";
+import { appTo, sendEmail } from "./alerts.ts";
 import { json } from "./api-auth.ts";
 import { hashPassword, passwordProblem, sessionCookie } from "./auth.ts";
 import { cleanEmail, cleanName, iso, verifyStripe } from "./core.ts";
@@ -256,12 +256,12 @@ async function webhook(request: Request, env: Env): Promise<Response> {
 		}
 		if (account && typeof o.subscription === "string") {
 			const sub = await stripe<Sub>(env, `/subscriptions/${o.subscription}`);
-			await saveSub(db, account, sub);
+			await saveSub(env, account, sub);
 		}
 	} else if (event.type.startsWith("customer.subscription.")) {
 		const sub = o as unknown as Sub;
 		const account = sub.metadata?.account ?? (await db.prepare("SELECT id FROM accounts WHERE stripe_sub = ? OR stripe_customer = ?").bind(sub.id, sub.customer).first<{ id: string }>())?.id;
-		if (account) await saveSub(db, account, event.type === "customer.subscription.deleted" ? { ...sub, status: "canceled" } : sub);
+		if (account) await saveSub(env, account, event.type === "customer.subscription.deleted" ? { ...sub, status: "canceled" } : sub);
 	}
 	return json({ received: true });
 }
@@ -269,7 +269,9 @@ async function webhook(request: Request, env: Env): Promise<Response> {
 /** Stripe's statuses that mean the subscription has ended for good. */
 const ENDED = ["canceled", "incomplete_expired", "unpaid"];
 
-async function saveSub(db: D1Database, account: string, sub: Sub): Promise<void> {
+async function saveSub(env: Env, account: string, sub: Sub): Promise<void> {
+	const db = env.DB;
+	const before = await db.prepare("SELECT status, plan FROM accounts WHERE id = ?").bind(account).first<{ status: string; plan: string | null }>();
 	// The plan is whichever item is a plan's price: extra team logins (team.ts) are a second item on the same subscription.
 	let plan: { id: string } | null = null;
 	for (const it of sub.items?.data ?? []) {
@@ -290,4 +292,18 @@ async function saveSub(db: D1Database, account: string, sub: Sub): Promise<void>
 		.bind(sub.customer, sub.id, sub.status, plan?.id ?? sub.metadata?.plan ?? null, periodEnd ? iso(new Date(periodEnd * 1000)) : null, account).run();
 	// Moving up from a smaller plan: things paused to fit it carry on.
 	if (sub.status === "active" || sub.status === "trialing") await db.prepare("UPDATE monitors SET paused_until = NULL WHERE account_id = ? AND paused_until = '9999-12-31T00:00:00Z'").bind(account).run();
+	await welcomeToPlan(env, account, before, sub.status);
+}
+
+const PAID = ["active", "trialing"];
+
+/** Newly paid, or moved to another paid plan: a "You're now on Pro" note to the person's Site Patrol apps.
+ *  Stripe sends several events for one upgrade; only the first sees the change, so it goes once. */
+async function welcomeToPlan(env: Env, account: string, before: { status: string; plan: string | null } | null, status: string): Promise<void> {
+	if (!before || !PAID.includes(status)) return;
+	const now = await env.DB.prepare("SELECT a.plan, a.session_ver, p.name FROM accounts a LEFT JOIN plans p ON p.id = a.plan WHERE a.id = ?").bind(account).first<{ plan: string | null; session_ver: number; name: string | null }>();
+	if (!now?.name || (PAID.includes(before.status) && before.plan === now.plan)) return;
+	const apps = await env.DB.prepare("SELECT url, secret FROM channels WHERE account_id = ? AND kind = 'apns'").bind(account).all<{ url: string; secret: string | null }>();
+	const e = { subject: `You're now on ${now.name}`, text: `Thanks for upgrading. Everything in ${now.name} is switched on.`, urgent: false, event: "alert" as const, url: null, sentAt: iso(new Date()) };
+	for (const c of apps.results ?? []) await appTo(env, now, c, e, null, "plan").catch(() => "failed");
 }

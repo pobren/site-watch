@@ -76,8 +76,10 @@ input[type=checkbox]{width:auto;margin-right:8px;transform:scale(1.2)}
 .kind{display:inline-block;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--soft);background:#f1f5f9;border-radius:6px;padding:2px 8px;margin-left:6px;vertical-align:middle}
 .more{margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
 .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:8px}
-.tile{border:2px solid var(--line);background:#fff;border-radius:16px;padding:16px;text-align:left;font:inherit;cursor:pointer}
+.tile{border:2px solid var(--line);background:#fff;border-radius:16px;padding:16px;text-align:left;font:inherit;cursor:pointer;display:flex;flex-direction:column;justify-content:flex-start;align-items:flex-start;gap:6px}
 .tile b{display:flex;align-items:center;gap:8px;font-size:18px}.tile span{color:var(--soft);font-size:14px}
+.chan{display:flex;align-items:center;gap:12px}.chan-ic{flex:none;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;color:#fff}
+.chan-ic.off{filter:grayscale(1);opacity:.55}
 .tile.on{border-color:var(--brand);background:color-mix(in srgb,var(--brand) 6%,#fff)}
 .copy{display:flex;gap:8px}.copy input{font-family:ui-monospace,Menlo,monospace;font-size:14px}
 table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:14px;color:var(--soft)}
@@ -165,6 +167,12 @@ const ICONS = {
 	up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
 	phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
 	chev: '<path d="m6 9 6 6 6-6"/>',
+	hash: '<path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18"/>',
+	chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+	sms: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M8 10h.01M12 10h.01M16 10h.01"/>',
+	link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+	screen: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
+	game: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><rect x="2" y="6" width="20" height="12" rx="4"/>',
 	users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
 };
 const icon = (n, size = 18) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("width", size); s.setAttribute("height", size); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor"); s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round"); s.setAttribute("aria-hidden", "true"); s.innerHTML = ICONS[n] || ""; return s; };
@@ -622,6 +630,13 @@ function editForm(x) {
 	return card;
 }
 
+// Each kind of alert channel gets its own coloured icon, so the list is easy to scan.
+const CHAN_LOOK = { sms: ["sms", "#0ea5e9"], whatsapp: ["chat", "#16a34a"], apns: ["phone", "#111827"], push: ["screen", "#6366f1"], slack: ["hash", "#7c3aed"], teams: ["users", "#4f46e5"], google: ["chat", "#0f9d58"], discord: ["game", "#5865f2"], webhook: ["link", "#64748b"] };
+function chanIcon(kind, on = true) {
+	const [ic, colour] = CHAN_LOOK[kind] || ["bell", "#64748b"];
+	return h("span", { class: "chan-ic" + (on ? "" : " off"), style: "background:" + colour, "aria-hidden": "true" }, icon(ic, 20));
+}
+
 let addKind = "website";
 function add() {
 	const lim = state.limits;
@@ -717,7 +732,7 @@ function alerts() {
 				btn("Send a test alert", "send", (e) => act(e.currentTarget, async () => { const r = await api("/api/alerts/test", {}); return r; }, "Test sent. Check your email and channels.")))),
 		h("div", { class: "card" }, h("h2", null, canChat ? "Devices, chat and webhooks" : "Your devices"),
 			state.channels.length ? h("table", null, h("tr", null, h("th", null, "Channel"), h("th", null, "Where"), h("th", null, "")),
-				state.channels.map((c) => h("tr", null, h("td", null, h("b", null, c.name), h("div", { class: "hint" }, c.kindName + (c.on ? "" : " · switched off" + (c.fails ? " after " + c.fails + " failed posts" : "")))),
+				state.channels.map((c) => h("tr", null, h("td", null, h("div", { class: "chan" }, chanIcon(c.kind, c.on), h("div", null, h("b", null, c.name), h("div", { class: "hint" }, c.kindName + (c.on ? "" : " · switched off" + (c.fails ? " after " + c.fails + " failed posts" : "")))))),
 					h("td", null, c.where, c.secret ? h("div", { class: "hint" }, "Signing secret: ", h("code", null, c.secret)) : null),
 					h("td", null, h("div", { class: "btns", style: "margin:0" }, btn("Test", "send", (e) => act(e.currentTarget, () => api("/api/channels/" + c.id + "/test", {}), "Sent to " + c.name), "small"),
 						btn(c.on ? "Switch off" : "Switch on", c.on ? "pause" : "play", (e) => act(e.currentTarget, () => api("/api/channels/" + c.id, { on: !c.on })), "small"),

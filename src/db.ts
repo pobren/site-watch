@@ -276,8 +276,10 @@ const COLUMNS = [
 	// 1.15.0: planned maintenance windows on notices (maintenance.ts).
 	"ALTER TABLE notices ADD COLUMN starts_at TEXT",
 	"ALTER TABLE notices ADD COLUMN ends_at TEXT",
+	// 1.15.1: a team member's own app sign in (apps.ts). Null for the account's own login.
+	"ALTER TABLE app_devices ADD COLUMN member_id TEXT",
 ];
-const SCHEMA_VERSION = "14";
+const SCHEMA_VERSION = "15";
 
 let ready: Promise<void> | null = null;
 

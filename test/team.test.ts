@@ -21,3 +21,10 @@ test("admins change things, but not billing, the team, keys or the account", () 
 	for (const p of ["/api/team", "/api/team/0123456789abcdef", "/api/keys", "/api/billing/portal", "/api/account/delete", "/api/admin/plans", "/api/app/qr", "/api/live-link", "/api/connector/disconnect"])
 		assert.ok(memberMay(member("admin"), "POST", p), p);
 });
+
+test("anyone on the team can turn on alerts in their own app and sign it out", () => {
+	for (const role of ["viewer", "admin"] as const) {
+		assert.equal(memberMay(member(role), "POST", "/api/app/push"), null);
+		assert.equal(memberMay(member(role), "POST", "/api/app/signout"), null);
+	}
+});
