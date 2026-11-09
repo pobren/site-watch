@@ -26,12 +26,13 @@ import { configure, WL } from "./whitelabel.ts";
 import { handleConnector, isConnectorPath } from "./connect.ts";
 import { findPage, renderStatus } from "./status.ts";
 import { renderLive } from "./live.ts";
+import { feed, handleSubscribe, handleSubscriptionLink } from "./subscribers.ts";
 import { handleV1 } from "./v1.ts";
 import { appPage, connectPage } from "./ui.ts";
 
 export { Probe } from "./probe.ts";
 
-const VERSION = "1.10.0";
+const VERSION = "1.11.0";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -98,9 +99,19 @@ export default {
 			}
 		}
 
+		// Status page subscribers (subscribers.ts): the links in their emails, the form and the feed.
+		const link = /^\/subscriptions\/(confirm|unsubscribe)\/([0-9a-f]{32})\/?$/.exec(path);
+		if (link) return withHeaders(await handleSubscriptionLink(request, env, link[1], link[2]));
+		const sub = /^(\/status\/[a-z0-9-]{2,40})?\/(subscribe|feed\.atom)$/.exec(path);
+		if (sub) {
+			const p = await findPage(env.DB, sub[1] ?? "/", url.hostname, env.PAGE_DOMAIN?.toLowerCase());
+			if (p && sub[2] === "subscribe" && request.method === "POST") return withHeaders(await handleSubscribe(request, env, p));
+			if (p && sub[2] === "feed.atom") return withHeaders(await feed(env, p));
+		}
+
 		if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
 		const page = await findPage(env.DB, path, url.hostname, env.PAGE_DOMAIN?.toLowerCase());
-		if (page) return withHeaders(await renderStatus(env.DB, page), { "x-frame-options": "SAMEORIGIN" });
+		if (page) return withHeaders(await renderStatus(env.DB, page, path.startsWith("/status/") ? `/status/${page.slug}` : ""), { "x-frame-options": "SAMEORIGIN" });
 
 		const live = /^\/live\/([0-9a-f]{32})\/?$/.exec(path);
 		if (live) return withHeaders(await renderLive(env.DB, live[1]));

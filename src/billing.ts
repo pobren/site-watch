@@ -56,7 +56,7 @@ export async function livePlans(db: D1Database, paid = true): Promise<PlanRow[]>
 
 export const publicPlan = (p: PlanRow) => ({
 	id: p.id, name: p.name, blurb: p.blurb, price: p.price_label, priceYear: p.stripe_price_year ? p.price_label_year : null, free: p.free === 1,
-	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all", phoneAlerts: p.phone_alerts ?? 0, fast: p.fast ?? 0,
+	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all", phoneAlerts: p.phone_alerts ?? 0, fast: p.fast ?? 0, subscribers: p.subscribers ?? 0, subEmails: p.sub_emails ?? 0, subHooks: p.sub_hooks ?? 0,
 });
 
 /** The free plan clients drop back to when a paid subscription ends, if there is one. */

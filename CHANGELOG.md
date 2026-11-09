@@ -1,5 +1,14 @@
 # Changes
 
+## 1.11.0: Status page subscribers
+
+- **Visitors can subscribe** to a status page by email, Slack, Discord, Microsoft Teams, Google Chat, webhook or Atom feed, for everything on the page or only the things they pick. Emails are confirmed by a link first and every email has a one click unsubscribe.
+- **They hear about** notices when you post and resolve them (a tick box on the notice form), and things going down and coming back once our other regions agree (a setting on each page).
+- **Status pages tab**: subscriber count, emails used this month, the list with Remove, and Add subscribers for pasting addresses from a spreadsheet.
+- **Plans** set email subscribers, subscriber emails a month and chat rooms (Admin tab). Free plans have none. If a month's emails would run out, the oldest subscribers still get them and the rest are skipped until next month.
+- **Amazon SES** sends subscriber emails when `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY` and `SES_REGION` are set. Big lists are sent in batches through the CHECKS queue.
+- Status pages now reload without losing what you're typing in the subscribe form.
+
 ## 1.10.0: API and DNS checks
 
 - **API checks**: choose the method, add headers (such as an Authorization token) and a body, and check the status, words, time and a JSON value, such as `status` equals `ok` or `data.ready` equals `true`. Anything under 400 counts as working unless a status is set. Header values only show their first few characters once saved, and editing without touching them keeps them.

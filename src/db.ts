@@ -39,11 +39,17 @@ export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 	DOMAIN_TARGET?: string;
 	/** Optional helpers in other regions that confirm a failure before a "down" alert goes (probe.ts). */
 	PROBES?: DurableObjectNamespace;
+	/** Optional Amazon SES keys for emails to status page subscribers (cheaper for big lists than the EMAIL binding).
+	 *  The sending address (Admin, "alerts come from") must be verified in SES. */
+	SES_ACCESS_KEY_ID?: string;
+	SES_SECRET_ACCESS_KEY?: string;
+	SES_REGION?: string;
 }
 
 /** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */
 /** `at`: when the checks are meant to run (half a minute ahead for the second look at 30 second checks). */
-export interface CheckBatch { ids: string[]; daily?: boolean; late?: boolean; at: number }
+export interface CheckBatch { ids: string[]; daily?: boolean; late?: boolean; at: number; /** 1.11.0: a batch of subscriber messages instead (subscribers.ts). */ sends?: SubSend[] }
+export interface SubSend { kind: string; target: string; token: string; subject: string; text: string; from: string; fromName: string; unsub: string; look?: { colour: string | null; logo: string | null; name: string } }
 
 export interface MonitorRow {
 	id: string;
@@ -128,6 +134,10 @@ export interface PlanRow {
 	phone_alerts?: number;
 	/** 1.8.0: how many things may be checked every 30 seconds (0: none). */
 	fast?: number;
+	/** 1.11.0: email subscribers across the account's status pages, emails to them a month, and chat or webhook subscribers. */
+	subscribers?: number;
+	sub_emails?: number;
+	sub_hooks?: number;
 }
 
 const SCHEMA = [
@@ -159,6 +169,14 @@ const SCHEMA = [
 	`CREATE TABLE IF NOT EXISTS notices (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, page_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
 		impact TEXT NOT NULL DEFAULT 'minor', created_at TEXT NOT NULL, resolved_at TEXT)`,
+	// 1.11.0: people and chat rooms following a status page. kind: email, slack, discord, teams, google or webhook.
+	// target is the email address or the incoming webhook address; monitors a JSON list (null: everything on the page).
+	`CREATE TABLE IF NOT EXISTS subscribers (
+		id TEXT PRIMARY KEY, page_id TEXT NOT NULL, account_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, monitors TEXT,
+		token TEXT NOT NULL UNIQUE, confirmed_at TEXT, created_at TEXT NOT NULL, ip TEXT, UNIQUE (page_id, kind, target))`,
+	"CREATE INDEX IF NOT EXISTS subscribers_page ON subscribers (page_id, confirmed_at)",
+	// Emails sent to subscribers each month, for the plan's fair use limit.
+	"CREATE TABLE IF NOT EXISTS sub_sends (account_id TEXT NOT NULL, month TEXT NOT NULL, emails INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, month))",
 	// 1.2.0: API keys (keys.ts) and the AI connector's sign-in (oauth.ts). Keys, codes and tokens are kept as SHA-256 hashes.
 	`CREATE TABLE IF NOT EXISTS api_keys (
 		id TEXT PRIMARY KEY, account_id TEXT NOT NULL, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL,
@@ -210,8 +228,14 @@ const COLUMNS = [
 	"ALTER TABLE pages ADD COLUMN support TEXT",
 	"ALTER TABLE pages ADD COLUMN colour TEXT",
 	"ALTER TABLE plans ADD COLUMN fast INTEGER NOT NULL DEFAULT 0",
+	// 1.11.0: status page subscribers (subscribers.ts).
+	"ALTER TABLE plans ADD COLUMN subscribers INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE plans ADD COLUMN sub_emails INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE plans ADD COLUMN sub_hooks INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE pages ADD COLUMN auto_notify INTEGER NOT NULL DEFAULT 1",
+	"ALTER TABLE pages ADD COLUMN subscribe INTEGER NOT NULL DEFAULT 1",
 ];
-const SCHEMA_VERSION = "9";
+const SCHEMA_VERSION = "10";
 
 let ready: Promise<void> | null = null;
 

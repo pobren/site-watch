@@ -30,6 +30,19 @@ Public pages showing whether things are working, 90 days of daily bars and your 
 
 <img src="docs/status-page.png" alt="A Site Watch status page on a phone" width="320">
 
+### Subscribers
+
+Visitors can subscribe to a status page by email (they confirm with a link first), add a Slack, Discord, Microsoft Teams or Google Chat room, add a webhook, or follow its Atom feed. They can pick only the things they care about. They hear when you post or resolve a notice, and (unless you turn it off for the page) when something on it goes down and comes back. Every email has a one click unsubscribe link.
+
+On the Status pages tab you can see who has subscribed, remove people and add addresses from a spreadsheet. Plans set how many email subscribers, emails a month and chat rooms each client gets (Admin tab). The owner has no limit.
+
+Subscriber emails go through Amazon SES when these Worker secrets are set, as SES costs far less for large lists:
+
+- `SES_ACCESS_KEY_ID` and `SES_SECRET_ACCESS_KEY`: a key that can only call `ses:SendRawEmail`
+- `SES_REGION`: such as `eu-west-1`
+
+The sending address (the one alerts come from) must be verified in SES. Without these secrets, subscriber emails go through the Cloudflare email binding like alerts.
+
 ## API, webhooks and AI connector
 
 Full guide: [paulobrien.dev/watch/api](https://paulobrien.dev/watch/api/). The same rules as Mail App, ReaderCount and DMARC Reports.

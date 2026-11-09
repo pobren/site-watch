@@ -2,6 +2,7 @@
 // Each account sees only its own things; the owner also gets the Admin routes (branding, plans, clients).
 
 import { REGIONS } from "./probe.ts";
+import { emailsThisMonth, HOOK_NAMES, subLimits, tellSubscribers } from "./subscribers.ts";
 import { appTo, deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
 import { apnsReady } from "./apns.ts";
 import { deleteAccount, handleApps, listApps } from "./apps.ts";
@@ -91,6 +92,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		install(db),
 		limitsOf(db, me),
 	]);
+	const subCounts = new Map((await db.prepare("SELECT page_id, COUNT(*) AS n FROM subscribers WHERE account_id = ? AND confirmed_at IS NOT NULL GROUP BY page_id").bind(me.id).all<{ page_id: string; n: number }>()).results.map((r) => [r.page_id, r.n]));
 	const out: Record<string, unknown> = {
 		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
@@ -98,7 +100,9 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		// Phones waiting for their code are listed under phones.pending, not here. Only webhooks show their secret.
 		channels: chans.results.filter((c) => !isPhone(c.kind) || phoneSecretOf(c.secret).verified).map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "webhook" ? c.secret : null, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
 		phones: await phonesState(env, me, chans.results, limits),
-		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug) })),
+		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug), subscribers: subCounts.get(p.id as string) ?? 0 })),
+		// Status page subscribers: the plan's limits and this month's emails (subscribers.ts).
+		subs: { ...(await subLimits(db, me)), used: await emailsThisMonth(db, me.id), viaSes: !!env.SES_ACCESS_KEY_ID },
 		pageDomain: env.PAGE_DOMAIN?.toLowerCase() ?? null,
 		domainTarget: env.DOMAIN_TARGET?.toLowerCase() ?? null,
 		notices: notices.results,
@@ -531,6 +535,9 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if (logo !== undefined) await db.prepare("UPDATE pages SET logo = ? WHERE id = ?").bind(logo, id).run();
 			if (support !== undefined) await db.prepare("UPDATE pages SET support = ? WHERE id = ?").bind(support, id).run();
 			if (colour !== undefined) await db.prepare("UPDATE pages SET colour = ? WHERE id = ?").bind(colour, id).run();
+			// Subscribers: whether the page takes them, and whether things going down and back up are sent automatically.
+			if (typeof b.subscribe === "boolean") await db.prepare("UPDATE pages SET subscribe = ? WHERE id = ?").bind(b.subscribe ? 1 : 0, id).run();
+			if (typeof b.autoNotify === "boolean") await db.prepare("UPDATE pages SET auto_notify = ? WHERE id = ?").bind(b.autoNotify ? 1 : 0, id).run();
 		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, support, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, support ?? null, colour ?? null, iso(new Date())).run();
 		return reply({ ok: true });
 	}
@@ -565,6 +572,32 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		return bad("Not found", 404);
 	}
+	// Subscribers: the list for one page, adding addresses by hand or from a spreadsheet, and removing one.
+	const sp = /^\/api\/pages\/([0-9a-f]{12})\/subscribers$/.exec(path);
+	if (sp) {
+		if (!(await db.prepare("SELECT 1 FROM pages WHERE id = ? AND account_id = ?").bind(sp[1], me.id).first())) return bad("We couldn't find that page.", 404);
+		if (method === "POST") {
+			const sl = await subLimits(db, me);
+			const list = [...new Set(String(b.emails ?? "").split(/[\s,;]+/).map((x) => cleanEmail(x)).filter((x): x is string => !!x))].slice(0, 5000);
+			if (!list.length) return bad("Please paste one or more email addresses.");
+			if (sl.subscribers !== null) {
+				const n = (await db.prepare("SELECT COUNT(*) AS n FROM subscribers WHERE account_id = ? AND kind = 'email'").bind(me.id).first<{ n: number }>())?.n ?? 0;
+				if (n + list.length > sl.subscribers) return bad(sl.subscribers ? `Your plan includes ${sl.subscribers.toLocaleString("en-GB")} email subscribers and you have ${n.toLocaleString("en-GB")}.` : "Your plan doesn't include subscribers.", 403);
+			}
+			const now = iso(new Date());
+			const rows = list.map((e) => db.prepare("INSERT INTO subscribers (id, page_id, account_id, kind, target, token, confirmed_at, created_at) VALUES (?, ?, ?, 'email', ?, ?, ?, ?) ON CONFLICT (page_id, kind, target) DO UPDATE SET confirmed_at = COALESCE(confirmed_at, excluded.confirmed_at)").bind(newId(8), sp[1], me.id, e, newId(16), now, now));
+			for (let i = 0; i < rows.length; i += 100) await db.batch(rows.slice(i, i + 100));
+			return reply({ added: list.length });
+		}
+		const { results } = await db.prepare("SELECT id, kind, target, monitors, confirmed_at, created_at FROM subscribers WHERE page_id = ? ORDER BY created_at DESC LIMIT 1000").bind(sp[1]).all<{ id: string; kind: string; target: string; monitors: string | null; confirmed_at: string | null; created_at: string }>();
+		// Chat and webhook addresses work like passwords: only where they go is shown.
+		return json({ subscribers: results.map((r) => ({ ...r, target: r.kind === "email" ? r.target : `${HOOK_NAMES[r.kind] ?? r.kind}: ${maskUrl(r.target)}`, monitors: r.monitors ? JSON.parse(r.monitors) : null })) });
+	}
+	const sd = /^\/api\/subscribers\/([0-9a-f]{16})$/.exec(path);
+	if (sd && method === "DELETE") {
+		await db.prepare("DELETE FROM subscribers WHERE id = ? AND account_id = ?").bind(sd[1], me.id).run();
+		return reply();
+	}
 	const pg = /^\/api\/pages\/([0-9a-f]{12})(\/notices)?$/.exec(path);
 	if (pg) {
 		if (!(await db.prepare("SELECT 1 FROM pages WHERE id = ? AND account_id = ?").bind(pg[1], me.id).first())) return bad("We couldn't find that page.", 404);
@@ -580,6 +613,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			const impact = ["minor", "major", "maintenance"].includes(String(b.impact)) ? String(b.impact) : "minor";
 			const text = typeof b.body === "string" ? b.body.trim().slice(0, 2000) : "";
 			await db.prepare("INSERT INTO notices (page_id, title, body, impact, created_at) VALUES (?, ?, ?, ?, ?)").bind(pg[1], title, text, impact, iso(new Date())).run();
+			if (b.tell !== false) await tellSubscribers(env, pg[1], `${impact === "maintenance" ? "Planned maintenance" : impact === "major" ? "Major problem" : "Update"}: ${title}`, text || title).catch((e) => console.error("subscribers", e));
 			return reply();
 		}
 	}
@@ -588,7 +622,10 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		const n = await db.prepare("SELECT n.id FROM notices n JOIN pages p ON p.id = n.page_id WHERE n.id = ? AND p.account_id = ?").bind(Number(nt[1]), me.id).first();
 		if (!n) return bad("We couldn't find that notice.", 404);
 		if (method === "DELETE") await db.prepare("DELETE FROM notices WHERE id = ?").bind(Number(nt[1])).run();
-		else if (nt[2]) await db.prepare("UPDATE notices SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL").bind(iso(new Date()), Number(nt[1])).run();
+		else if (nt[2]) {
+			const done = await db.prepare("UPDATE notices SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL RETURNING page_id, title").bind(iso(new Date()), Number(nt[1])).first<{ page_id: string; title: string }>();
+			if (done && b.tell !== false) await tellSubscribers(env, done.page_id, `Resolved: ${done.title}`, `This is now resolved: ${done.title}.`).catch((e) => console.error("subscribers", e));
+		}
 		return reply();
 	}
 
@@ -672,11 +709,14 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		if (phoneAlerts === null) return bad("Please choose between 0 and 10,000 text and WhatsApp alerts a month.");
 		const fast = b.fast === "" || b.fast === undefined || b.fast === null ? 0 : num(b.fast, 0, 10_000);
 		if (fast === null) return bad("Please choose how many things can be checked every 30 seconds, from 0 up.");
+		const opt = (x: unknown, max: number) => (x === "" || x === undefined || x === null ? 0 : num(x, 0, max));
+		const subscribers = opt(b.subscribers, 1_000_000), subEmails = opt(b.subEmails, 10_000_000), subHooks = opt(b.subHooks, 10_000);
+		if (subscribers === null || subEmails === null || subHooks === null) return bad("Please give the subscriber limits as whole numbers, from 0 up.");
 		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
-			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors)];
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);

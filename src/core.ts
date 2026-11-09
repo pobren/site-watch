@@ -947,12 +947,12 @@ export const cleanEmail = (input: unknown): string | null => {
 };
 
 /** An email as raw MIME, for Cloudflare's send_email binding: plain text, or text and HTML side by side. */
-export function rawEmail(from: string, to: string, subject: string, text: string, now: Date, id: string, fromName = "Site Watch", html?: string): string {
+export function rawEmail(from: string, to: string, subject: string, text: string, now: Date, id: string, fromName = "Site Watch", html?: string, extra: string[] = []): string {
 	const enc = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(s)}?=`);
 	const wrap = (s: string) => b64(s).replace(/.{76}/g, "$&\r\n");
 	const head = [
 		`From: ${enc(fromName.replace(/["<>\r\n]/g, ""))} <${from}>`, `To: ${to}`, `Subject: ${enc(subject)}`, `Date: ${now.toUTCString()}`,
-		`Message-ID: <${id}@${from.split("@")[1]}>`, "MIME-Version: 1.0", "Auto-Submitted: auto-generated",
+		`Message-ID: <${id}@${from.split("@")[1]}>`, "MIME-Version: 1.0", "Auto-Submitted: auto-generated", ...extra.filter((l) => !/[\r\n]/.test(l)),
 	];
 	if (!html) return [...head, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(text), ""].join("\r\n");
 	const edge = `sw-${id}`;

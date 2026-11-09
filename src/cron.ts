@@ -10,6 +10,8 @@ import {
 	type Cert, type Registration,
 } from "./core.ts";
 import { secondOpinions } from "./probe.ts";
+import { runSends, tellAboutMonitor } from "./subscribers.ts";
+import { publicName } from "./status.ts";
 import { accountById, ensureSchema, install, LIVE_SQL, type AccountRow, type CheckBatch, type Env, type MonitorRow } from "./db.ts";
 
 /** Checks per run, and how many at once (Workers allow six open connections; the free plan 50 requests a run). */
@@ -61,7 +63,11 @@ export async function checkOne(env: Env, row: MonitorRow, account: AccountRow, n
 	}
 	await env.DB.prepare("UPDATE monitors SET state = ?, checked_at = ? WHERE id = ?").bind(JSON.stringify(next), iso(now), row.id).run();
 	if (opts.quiet) return;
-	for (const e of events) await deliver(env, account, alertFor({ ...row }, e, account.tz, ctx.link, ctx.app), row.id, now);
+	for (const e of events) {
+		await deliver(env, account, alertFor({ ...row }, e, account.tz, ctx.link, ctx.app), row.id, now);
+		// Status pages that tell their subscribers automatically (subscribers.ts).
+		if (e.kind === "down" || e.kind === "up") await tellAboutMonitor(env, row.account_id, row.id, publicName(row), e.kind === "down", e.kind === "down" ? e.since : null).catch((x) => console.error("subscribers", x));
+	}
 }
 
 /** The once-a-day look at a website's certificate and domain registration, with reminders. */
@@ -121,6 +127,12 @@ export async function runQueue(env: Env, messages: readonly Message<CheckBatch>[
 		return accounts.get(id)!;
 	};
 	for (const m of messages) {
+		// A batch of messages to status page subscribers: tried again shortly if Amazon asks us to slow down.
+		if (m.body.sends) {
+			if ((await runSends(env, m.body.sends)) === "slow") m.retry({ delaySeconds: 30 });
+			else m.ack();
+			continue;
+		}
 		const { ids, daily, late, at } = m.body;
 		const now = new Date();
 		// A message that waited too long counts as late: failures from it aren't trusted.
