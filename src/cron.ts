@@ -4,6 +4,7 @@
 // website's certificate and domain renewal date are looked up too, with reminders before either runs out.
 
 import { monthlyReports } from "./extras.ts";
+import { endMaintenance, inMaintenance } from "./maintenance.ts";
 import { deliver } from "./alerts.ts";
 import { checkJob, lookupCert, lookupRegistration, type Result } from "./checks.ts";
 import {
@@ -52,7 +53,7 @@ export async function look(row: MonitorRow, now: Date, helloName: string): Promi
 export interface Ctx { helloName: string; link: string; app: string }
 
 export async function checkOne(env: Env, row: MonitorRow, account: AccountRow, now: Date, ctx: Ctx, opts: { late?: boolean; quiet?: boolean } = {}): Promise<void> {
-	const { outcome, ms } = await look(row, now, ctx.helloName);
+	const { outcome, ms, detail } = await look(row, now, ctx.helloName);
 	if (opts.late && outcome.state !== "up") {
 		await env.DB.prepare("UPDATE monitors SET checked_at = ? WHERE id = ?").bind(iso(now), row.id).run();
 		return;
@@ -65,8 +66,12 @@ export async function checkOne(env: Env, row: MonitorRow, account: AccountRow, n
 		if (askAgain(before, now)) ({ next, events } = weighOpinions(next, events, await secondOpinions(env, row, ctx.helloName).catch(() => null), now));
 		else ({ next, events } = { next: { ...next, alerted: false, regional: before.regional }, events: events.filter((e) => e.kind !== "down") });
 	}
+	// What it answered when it failed, for the dashboard's "What we saw" (kept until the next failure).
+	if (detail && outcome.state !== "up") next = { ...next, lastFail: { at: iso(now), why: "why" in outcome ? outcome.why : null, ...detail } };
 	await env.DB.prepare("UPDATE monitors SET state = ?, checked_at = ? WHERE id = ?").bind(JSON.stringify(next), iso(now), row.id).run();
 	if (opts.quiet) return;
+	// Planned maintenance on a status page showing it (maintenance.ts): nobody is alerted for work they planned.
+	if (events.length && (await inMaintenance(env.DB, row.account_id, row.id, now).catch(() => false))) return;
 	for (const e of events) {
 		await deliver(env, account, alertFor({ ...row }, e, account.tz, ctx.link, ctx.app), row.id, now);
 		// Status pages that tell their subscribers automatically (subscribers.ts).
@@ -233,6 +238,7 @@ export async function regionSpeeds(env: Env, now: Date): Promise<number> {
 
 /** Last month's uptime reports, every 10 minutes in the first three days of the month (extras.ts). */
 async function reports(env: Env, now: Date): Promise<void> {
+	if (now.getUTCMinutes() % 5 === 0) await endMaintenance(env, now).catch((e) => console.error("maintenance", e));
 	if (now.getUTCMinutes() % 10 !== 3) return;
 	await monthlyReports(env, now).catch((e) => console.error("monthly reports", e));
 }

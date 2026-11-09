@@ -279,6 +279,8 @@ export interface State {
 	flapping: string | null;
 	/** Set while it only fails from our own check: when other regions last said they could reach it, and which. */
 	regional?: { at: string; ok: string[] } | null;
+	/** The last time a website or API check failed: when, why, and what it answered (checks.ts FailDetail). */
+	lastFail?: { at: string; why: string | null; status: number | null; headers: Record<string, string>; body: string } | null;
 }
 export const NEW_STATE: State = { fails: 0, since: null, why: null, alerted: false, certFails: 0, certProblem: null, blockedFails: 0, blocked: null, outages: [], days: {}, hours: {}, ms: null, flapping: null, regional: null };
 
@@ -1057,4 +1059,19 @@ export function speedSummary(log: SpeedLog, regions: { hint: string; name: strin
 		const [t, n] = Object.entries(log[r.hint] ?? {}).filter(([h]) => h > from).reduce(([a, b], [, [x, y]]) => [a + x, b + y], [0, 0]);
 		return [{ region: r.name, avg: Math.round(t / n), worst: Math.max(...hours.map((x) => x.ms)), hours }];
 	});
+}
+
+/** Each day's checks and uptime between two dates (YYYY-MM-DD, both included), as CSV with a total line. */
+export function uptimeCsv(name: string, s: Pick<State, "days">, from: string, to: string): string {
+	const q = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+	const lines = ["Date,Checks up,Checks down,Uptime %"];
+	let up = 0, down = 0;
+	for (let d = new Date(`${from}T00:00:00Z`); d.toISOString().slice(0, 10) <= to && lines.length < 400; d = new Date(d.getTime() + 86_400_000)) {
+		const day = d.toISOString().slice(0, 10);
+		const [u, n] = s.days?.[day] ?? [0, 0];
+		up += u; down += n;
+		lines.push(`${day},${u},${n},${u + n ? Math.floor((u / (u + n)) * 10000) / 100 : ""}`);
+	}
+	lines.push(`${q(`${name} ${from} to ${to}`)},${up},${down},${up + down ? Math.floor((up / (up + down)) * 10000) / 100 : ""}`);
+	return lines.join("\r\n") + "\r\n";
 }

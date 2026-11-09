@@ -6,7 +6,7 @@ import { install, isLive, accountById, hasPro, type MonitorRow } from "./db.ts";
 import { subLimits } from "./subscribers.ts";
 
 interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; logo?: string | null; support?: string | null; colour?: string | null; subscribe?: number; password?: string | null; mail_token?: string | null }
-interface NoticeRow { id: number; title: string; body: string; impact: string; created_at: string; resolved_at: string | null }
+interface NoticeRow { id: number; title: string; body: string; impact: string; created_at: string; resolved_at: string | null; starts_at?: string | null; ends_at?: string | null }
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
@@ -44,7 +44,8 @@ export async function statusData(db: D1Database, page: PageRow, now = new Date()
 	});
 	const { results: notices } = await db.prepare("SELECT * FROM notices WHERE page_id = ? AND (resolved_at IS NULL OR resolved_at > ?) ORDER BY resolved_at IS NOT NULL, created_at DESC LIMIT 20")
 		.bind(page.id, iso(new Date(now.getTime() - 14 * 86_400_000))).all<NoticeRow>();
-	const open = notices.filter((n) => !n.resolved_at);
+	// Planned maintenance that hasn't started yet doesn't change how things look now (maintenance.ts).
+	const open = notices.filter((n) => !n.resolved_at && (!n.starts_at || n.starts_at <= iso(now)));
 	let all = overall(items.map((i) => i.state));
 	if (open.some((n) => n.impact === "major") && all.state === "up") all = { state: "degraded", text: "Some problems" };
 	else if (open.some((n) => n.impact === "maintenance") && all.state === "up") all = { state: "maintenance", text: "Maintenance under way" };
@@ -86,9 +87,11 @@ ${d.items.length > 1 ? `<details><summary>Only some of these</summary>${d.items.
 	// Each notice: a Live or Resolved tag, its kind, when it started and (once over) when it was resolved and how long it lasted.
 	const noticeCard = (n: NoticeRow) => {
 		const done = !!n.resolved_at;
+		const planned = !done && !!n.starts_at && n.starts_at > d.updated;
 		const c = done ? colour.up : kindColour(n);
-		const tags = `<div class="tags"><span class="tag" style="background:${c};color:#fff">${done ? "Resolved" : n.impact === "maintenance" ? "In progress" : "Live"}</span><span class="tag" style="color:${kindColour(n)};border-color:${kindColour(n)}">${kindWord(n)}</span></div>`;
-		const times = `<dl class="times"><div><dt>Started</dt><dd>${when(n.created_at)}</dd></div>${done ? `<div><dt>Resolved</dt><dd>${when(n.resolved_at!)}</dd></div><div><dt>Lasted</dt><dd>${lasted(n.created_at, n.resolved_at!)}</dd></div>` : ""}</dl>`;
+		const tags = `<div class="tags"><span class="tag" style="background:${c};color:#fff">${done ? "Resolved" : planned ? "Planned" : n.impact === "maintenance" ? "In progress" : "Live"}</span><span class="tag" style="color:${kindColour(n)};border-color:${kindColour(n)}">${kindWord(n)}</span></div>`;
+		const start = n.starts_at ?? n.created_at;
+		const times = n.ends_at && !done ? `<dl class="times"><div><dt>${planned ? "Starts" : "Started"}</dt><dd>${when(start)}</dd></div><div><dt>Ends</dt><dd>${when(n.ends_at)}</dd></div></dl>` : `<dl class="times"><div><dt>Started</dt><dd>${when(start)}</dd></div>${done ? `<div><dt>Resolved</dt><dd>${when(n.resolved_at!)}</dd></div><div><dt>Lasted</dt><dd>${lasted(start, n.resolved_at!)}</dd></div>` : ""}</dl>`;
 		return `<div class="card notice" style="border-left:5px solid ${c}">${tags}<h3>${esc(n.title)}</h3>${n.body ? `<p>${esc(n.body)}</p>` : ""}${times}</div>`;
 	};
 	const bar = (v: number | null) => `<i style="background:${v === null ? "#e2e8f0" : v >= 99.9 ? colour.up : v >= 98 ? "#84cc16" : v >= 90 ? colour.degraded : colour.down}" title="${v === null ? "No checks" : `${v}% up`}"></i>`;

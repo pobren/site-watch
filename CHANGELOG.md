@@ -1,5 +1,12 @@
 # Changes
 
+## 1.15.0: Dashboard extras and planned maintenance
+
+- **What we saw**: when a website or API check fails, the dashboard keeps what it answered: the status, a few headers and the start of the page.
+- **Post to status page**: one click on a monitor that's down posts a notice on every status page showing it, and tells subscribers.
+- **Uptime for any dates**: download a spreadsheet of each day's checks and uptime for dates you choose in the last 90 days.
+- **Planned maintenance windows**: a maintenance notice can have a start and an end. The page shows it as planned, alerts for that page's monitors wait while it runs, and it resolves itself at the end.
+
 ## 1.14.0: Teams
 
 - **Team logins**: invite colleagues as an Admin (changes things, but not billing, the team or keys) or a Viewer (looks only). Each person has their own email and password, and can choose to get the alert emails too.

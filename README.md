@@ -49,6 +49,10 @@ Each public status page has a badge (`/status/<address>/badge.svg`) and a small 
 
 On plans that allow it (Admin tab, "Status pages can have a password"), a page can have a password so only staff or a client can see it. Visitors type it once every 30 days. Private pages have no badge, widget or feed, and search engines are asked not to list them.
 
+### Planned maintenance
+
+Choose "Planned maintenance" when posting a notice and give it a start and an end. The status page shows it as planned until it starts, alerts for the monitors on that page wait while it runs, and it resolves itself (telling subscribers) when it ends.
+
 ### Posting notices by email
 
 Turn on "Post notices by email" for a page and it gets a private address, such as `update-1a2b...@updates.example.com`. Anything the account's own email address sends there becomes a notice and goes to subscribers. Start the subject with `Maintenance:` or `Major:` to set the type, or `Resolved` to close the latest notice.

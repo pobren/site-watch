@@ -273,8 +273,11 @@ const COLUMNS = [
 	"ALTER TABLE plans ADD COLUMN seat_price TEXT",
 	"ALTER TABLE plans ADD COLUMN seat_price_year TEXT",
 	"ALTER TABLE plans ADD COLUMN alert_people INTEGER NOT NULL DEFAULT 0",
+	// 1.15.0: planned maintenance windows on notices (maintenance.ts).
+	"ALTER TABLE notices ADD COLUMN starts_at TEXT",
+	"ALTER TABLE notices ADD COLUMN ends_at TEXT",
 ];
-const SCHEMA_VERSION = "13";
+const SCHEMA_VERSION = "14";
 
 let ready: Promise<void> | null = null;
 

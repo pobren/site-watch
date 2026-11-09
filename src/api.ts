@@ -3,6 +3,7 @@
 
 import { REGIONS } from "./probe.ts";
 import { canLock, updateAddress } from "./extras.ts";
+import { maintenanceWindow, windowWords } from "./maintenance.ts";
 import { handleTeam, memberMay, memberView, teamLimits, teamOf } from "./team.ts";
 import { emailsThisMonth, HOOK_NAMES, subLimits, tellSubscribers } from "./subscribers.ts";
 import { appTo, deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
@@ -14,7 +15,7 @@ import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
 	CHANNEL_NAMES, cleanApiRules, cleanDnsRules, DNS_TYPES, API_METHODS, type ApiRules, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
-	HELPER_REGIONS, isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, speedLogOf, speedSummary, stateOf, statusOf, uptime, daysLeft, type Kind,
+	HELPER_REGIONS, isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, speedLogOf, speedSummary, stateOf, uptimeCsv, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
 import { DEFAULT_BRAND, hasPro, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { cleanSub, vapidKeys } from "./push.ts";
@@ -51,6 +52,8 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 		uptime30: uptime(s, now, 30), uptime90: uptime(s, now, 90), bars: dailyBars(s, now).map((b) => b.up), responses: responseTimes(s),
 		// Failing only from our own check: the regions that could still reach it (probe.ts).
 		regional: s.regional && isDown(s) ? s.regional.ok : null,
+		// What it answered the last time it failed (websites and APIs).
+		lastFail: s.lastFail ?? null,
 		// Speed from each region over the last 24 hours, for plans that include it.
 		speeds: r.speeds ? speedSummary(speedLogOf(r.speeds), HELPER_REGIONS, now) : [],
 		outages: s.outages.slice(-10).reverse(), checkedAt: r.checked_at, pausedUntil: paused ? r.paused_until : null,
@@ -246,6 +249,20 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	if (path === "/api/export" && method === "GET") {
 		const data = await everything(env, me, url.origin);
 		return json({ exportedAt: iso(new Date()), ...data }, 200, { "content-disposition": `attachment; filename="site-watch-${iso(new Date()).slice(0, 10)}.json"` });
+	}
+	// Uptime for chosen dates as a spreadsheet (the monitor's "Uptime for any dates").
+	const csv = /^\/api\/monitors\/([0-9a-f]{16})\/uptime\.csv$/.exec(path);
+	if (csv && method === "GET") {
+		const row = await db.prepare("SELECT * FROM monitors WHERE id = ? AND account_id = ?").bind(csv[1], me.id).first<MonitorRow>();
+		if (!row) return bad("We couldn't find that.", 404);
+		const day = (v: string | null, d: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : d);
+		const today = iso(new Date()).slice(0, 10);
+		let from = day(url.searchParams.get("from"), iso(new Date(Date.now() - 29 * 86_400_000)).slice(0, 10));
+		let to = day(url.searchParams.get("to"), today);
+		if (to > today) to = today;
+		if (from > to) [from, to] = [to, from];
+		const name = labelOf(row);
+		return new Response(uptimeCsv(name, stateOf(row.state), from, to), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="uptime-${from}-to-${to}.csv"`, "cache-control": "no-store" } });
 	}
 	// Two reads live with the status page actions: the name checker and the own domain wizard's progress.
 	const readable = method === "GET" && (path === "/api/pages/name" || /^\/api\/pages\/[0-9a-f]{12}\/domain$/.test(path));
@@ -651,8 +668,12 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if (!title) return bad("Please give the notice a short title, such as Email is slow this morning.");
 			const impact = ["minor", "major", "maintenance"].includes(String(b.impact)) ? String(b.impact) : "minor";
 			const text = typeof b.body === "string" ? b.body.trim().slice(0, 2000) : "";
-			await db.prepare("INSERT INTO notices (page_id, title, body, impact, created_at) VALUES (?, ?, ?, ?, ?)").bind(pg[1], title, text, impact, iso(new Date())).run();
-			if (b.tell !== false) await tellSubscribers(env, pg[1], `${impact === "maintenance" ? "Planned maintenance" : impact === "major" ? "Major problem" : "Update"}: ${title}`, text || title).catch((e) => console.error("subscribers", e));
+			// Planned maintenance can have a window: alerts for the page's monitors wait, and it ends by itself.
+			const win = impact === "maintenance" ? maintenanceWindow(b.startsAt, b.endsAt, new Date()) : { startsAt: null, endsAt: null };
+			if ("error" in win) return bad(win.error);
+			await db.prepare("INSERT INTO notices (page_id, title, body, impact, created_at, starts_at, ends_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(pg[1], title, text, impact, iso(new Date()), win.startsAt, win.endsAt).run();
+			const when = win.startsAt ? `\n\nFrom ${windowWords(win.startsAt, win.endsAt!, me.tz)}.` : "";
+			if (b.tell !== false) await tellSubscribers(env, pg[1], `${impact === "maintenance" ? "Planned maintenance" : impact === "major" ? "Major problem" : "Update"}: ${title}`, (text || title) + when).catch((e) => console.error("subscribers", e));
 			return reply();
 		}
 	}

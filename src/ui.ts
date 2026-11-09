@@ -486,6 +486,26 @@ function overview() {
 		m.map(monitorCard));
 }
 
+// One click to tell visitors on every status page that shows this monitor (and their subscribers).
+function postOutageButton(x) {
+	const pgs = state.pages.filter((p) => p.monitors.includes(x.id));
+	if (!pgs.length || (state.me.member && state.me.member.role === "viewer")) return null;
+	const already = state.notices.some((n) => !n.resolved_at && pgs.some((p) => p.id === n.page_id) && n.title.startsWith(x.label));
+	if (already) return null;
+	return btn("Post to status page", "page", (e) => { if (confirm("Post a notice that " + x.label + " is down on " + pgs.map((p) => p.title).join(" and ") + "?")) act(e.currentTarget, async () => { let r; for (const p of pgs) r = await api("/api/pages/" + p.id + "/notices", { title: x.label + " is down", body: "We know about it and we're working on it. We'll update this page when it's fixed.", impact: "major" }); return r; }, "Posted"); }, "small");
+}
+
+// Uptime for any dates in the last 90 days, as a spreadsheet (CSV) of each day.
+function uptimeDownload(x) {
+	const today = new Date().toISOString().slice(0, 10);
+	const from = h("input", { type: "date", value: new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10), max: today });
+	const to = h("input", { type: "date", value: today, max: today });
+	return h("details", { style: "margin-top:12px" }, h("summary", { style: "cursor:pointer;font-weight:700" }, "Uptime for any dates"),
+		h("div", { class: "two" }, field("From", from), field("To", to)),
+		h("p", { class: "hint" }, "A spreadsheet of each day's checks and uptime, from the last 90 days."),
+		h("div", { class: "btns" }, btn("Download", "down", () => { location.href = "/api/monitors/" + x.id + "/uptime.csv?from=" + from.value + "&to=" + to.value; }, "small")));
+}
+
 function monitorCard(x) {
 	const isOpen = open.has(x.id);
 	const facts = [];
@@ -515,11 +535,17 @@ function monitorCard(x) {
 					x.responses.length ? h("tr", null, h("td", null, "Our main check"), h("td", null, Math.round(x.responses.reduce((n, r) => n + r.ms, 0) / x.responses.length) + " ms"), h("td", null, Math.max(...x.responses.map((r) => r.ms)) + " ms")) : null,
 					x.speeds.map((r) => h("tr", null, h("td", null, r.region.charAt(0).toUpperCase() + r.region.slice(1)), h("td", null, r.avg + " ms"), h("td", null, r.worst + " ms")))),
 				h("p", { class: "hint" }, "Checked every 5 minutes from each region, so you can see how fast it is for visitors far away.")) : null,
+			x.lastFail ? h("details", { style: "margin-top:12px" }, h("summary", { style: "cursor:pointer;font-weight:700" }, "What we saw when it last failed (" + when(x.lastFail.at) + ")"),
+				h("p", null, x.lastFail.status ? "Status " + x.lastFail.status + (x.lastFail.why ? ": " + x.lastFail.why : "") : x.lastFail.why || ""),
+				Object.keys(x.lastFail.headers).length ? h("table", null, Object.entries(x.lastFail.headers).map(([k, v]) => h("tr", null, h("th", null, k), h("td", { style: "word-break:break-all" }, v)))) : null,
+				x.lastFail.body ? h("pre", { style: "white-space:pre-wrap;word-break:break-word;max-height:240px;overflow:auto;background:var(--bg,#f8fafc);border:1px solid #e2e8f0;border-radius:10px;padding:10px;font-size:13px" }, x.lastFail.body) : null) : null,
+			uptimeDownload(x),
 			h("h3", { style: "margin-top:12px" }, "Recent outages"),
 			x.outages.length ? h("ul", null, x.outages.map((o) => h("li", null, when(o.from) + " to " + when(o.to) + ": " + o.why))) : h("p", { class: "hint" }, "None recorded."),
 			x.reg && x.reg.registrar ? h("p", { class: "hint" }, x.reg.domain + " is registered with " + x.reg.registrar + (x.reg.expires ? " until " + new Date(x.reg.expires).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "") + ".") : null,
 			editing === x.id ? editForm(x) : null,
 			h("div", { class: "btns" },
+				x.status === "down" ? postOutageButton(x) : null,
 				x.kind !== "heartbeat" ? btn("Check now", "refresh", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/check", {}), "Checked")) : null,
 				x.pausedUntil ? btn("Resume", "play", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/resume", {}))) : btn("Pause for an hour", "pause", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/pause", { minutes: 60 }))),
 				!x.pausedUntil ? btn("Pause for a day", "pause", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/pause", { minutes: 1440 }))) : null,
@@ -775,17 +801,21 @@ function pages() {
 		state.pages.map((pg) => {
 			const ntitle = h("input", { placeholder: "Email is slow this morning" });
 			const nbody = h("textarea", { placeholder: "What's happening, and when you expect it fixed" });
-			const nimpact = h("select", null, h("option", { value: "minor" }, "Minor problem"), h("option", { value: "major" }, "Major problem"), h("option", { value: "maintenance" }, "Maintenance"));
+			const nstart = h("input", { type: "datetime-local" });
+			const nend = h("input", { type: "datetime-local" });
+			const nwindow = h("div", { class: "two", style: "display:none" }, field("Starts (optional)", nstart), field("Ends", nend, "Alerts for this page's monitors wait until it ends, and it resolves itself."));
+			const nimpact = h("select", { onchange: (e) => { nwindow.style.display = e.target.value === "maintenance" ? "" : "none"; } }, h("option", { value: "minor" }, "Minor problem"), h("option", { value: "major" }, "Major problem"), h("option", { value: "maintenance" }, "Planned maintenance"));
+			const iso = (v) => (v ? new Date(v).toISOString() : "");
 			const tell = h("input", { type: "checkbox", checked: (pg.subscribers || 0) > 0 });
 			const notes = state.notices.filter((n) => n.page_id === pg.id);
 			return h("div", { class: "card" }, h("h2", null, pg.title), copyBox(pg.host ? "https://" + pg.host + "/" : pg.address),
 				h("div", { class: "btns" }, h("a", { class: "btn", href: pg.address, target: "_blank", rel: "noopener" }, icon("open"), "Open"), btn("Edit", "edit", () => { editing = { page: pg.id }; draw(); window.scrollTo(0, 0); }), btn("Delete", "trash", (e) => { if (confirm("Delete this status page?")) act(e.currentTarget, () => api("/api/pages/" + pg.id, undefined, "DELETE")); }, "danger")),
 				h("h3", { style: "margin-top:16px" }, "Notices"),
-				notes.length ? notes.map((n) => h("div", { class: "note" }, h("b", null, n.title), " · " + n.impact + " · " + when(n.created_at) + (n.resolved_at ? " · resolved " + when(n.resolved_at) : ""), n.body ? h("div", null, n.body) : null,
+				notes.length ? notes.map((n) => h("div", { class: "note" }, h("b", null, n.title), " · " + n.impact + " · " + (n.ends_at ? when(n.starts_at) + " to " + when(n.ends_at) : when(n.created_at)) + (n.resolved_at ? " · resolved " + when(n.resolved_at) : ""), n.body ? h("div", null, n.body) : null,
 					h("div", { class: "btns" }, !n.resolved_at ? btn("Mark resolved", "check", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id + "/resolve", {})), "small") : null, btn("Delete", "trash", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id, undefined, "DELETE")), "small danger")))) : h("p", { class: "hint" }, "None in the last 14 days."),
-				h("details", null, h("summary", { style: "cursor:pointer;font-weight:700" }, "Post a notice"), field("Title", ntitle), field("Details", nbody), field("Type", nimpact),
+				h("details", null, h("summary", { style: "cursor:pointer;font-weight:700" }, "Post a notice"), field("Title", ntitle), field("Details", nbody), field("Type", nimpact), nwindow,
 					(pg.subscribers || 0) > 0 ? h("label", { class: "check" }, tell, "Email and post this to the page's " + fmt(pg.subscribers) + " subscribers") : null,
-					h("div", { class: "btns" }, btn("Post notice", "send", (e) => act(e.currentTarget, () => api("/api/pages/" + pg.id + "/notices", { title: ntitle.value, body: nbody.value, impact: nimpact.value, tell: tell.checked }), "Posted")))),
+					h("div", { class: "btns" }, btn("Post notice", "send", (e) => act(e.currentTarget, () => api("/api/pages/" + pg.id + "/notices", { title: ntitle.value, body: nbody.value, impact: nimpact.value, tell: tell.checked, startsAt: nimpact.value === "maintenance" && nend.value ? iso(nstart.value) || new Date().toISOString() : "", endsAt: nimpact.value === "maintenance" ? iso(nend.value) : "" }), "Posted")))),
 				subsBlock(pg), extrasBlock(pg));
 		}));
 }
