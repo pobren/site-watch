@@ -14,7 +14,7 @@
 
 import qrcode from "qrcode-generator";
 import { apnsReady, cleanDeviceToken } from "./apns.ts";
-import { APP_KEY_PREFIX, checkPassword, clearFailures, currentAccount, currentApp, noteFailure, tooManyTries, type AppDeviceRow } from "./auth.ts";
+import { APP_KEY_PREFIX, checkPassword, clearFailures, currentAccount, currentApp, noteFailure, tooManyTries, type AppDeviceRow, type MemberRow } from "./auth.ts";
 import { cleanEmail, iso, planAllows } from "./core.ts";
 import { install, newId, planById, type AccountRow, type Env } from "./db.ts";
 import { sha256 } from "./keys.ts";
@@ -51,14 +51,18 @@ export function qrSvg(text: string): string {
 }
 
 /** Makes an app key for a device. The key itself is only ever returned here. */
-async function newApp(db: D1Database, a: AccountRow, nameIn: unknown, platformIn: unknown): Promise<string> {
+/** Signs an app in for an account's own login, or for one of its team (member). */
+async function newApp(db: D1Database, a: Pick<AccountRow, "id" | "session_ver">, nameIn: unknown, platformIn: unknown, member: Pick<MemberRow, "id" | "session_ver"> | null = null): Promise<string> {
 	const key = APP_KEY_PREFIX + newId(24);
+	const ver = member ? member.session_ver : a.session_ver;
+	const who = member ? "member_id = ?" : "member_id IS NULL";
+	const whoArgs = member ? [member.id] : [];
 	// Apps signed out by "Sign out everywhere" go for good now.
-	await db.prepare("DELETE FROM app_devices WHERE account_id = ? AND session_ver != ?").bind(a.id, a.session_ver).run();
-	const { results } = await db.prepare("SELECT id FROM app_devices WHERE account_id = ? ORDER BY COALESCE(last_used, created_at) DESC").bind(a.id).all<{ id: string }>();
+	await db.prepare(`DELETE FROM app_devices WHERE account_id = ? AND ${who} AND session_ver != ?`).bind(a.id, ...whoArgs, ver).run();
+	const { results } = await db.prepare(`SELECT id FROM app_devices WHERE account_id = ? AND ${who} ORDER BY COALESCE(last_used, created_at) DESC`).bind(a.id, ...whoArgs).all<{ id: string }>();
 	for (const old of results.slice(MAX_APPS - 1)) await forgetApp(db, a.id, old.id);
-	await db.prepare("INSERT INTO app_devices (id, account_id, name, platform, token_hash, session_ver, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-		.bind(newId(8), a.id, cleanDeviceName(nameIn), cleanPlatform(platformIn), await sha256(key), a.session_ver, iso(new Date())).run();
+	await db.prepare("INSERT INTO app_devices (id, account_id, name, platform, token_hash, session_ver, created_at, member_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+		.bind(newId(8), a.id, cleanDeviceName(nameIn), cleanPlatform(platformIn), await sha256(key), ver, iso(new Date()), member?.id ?? null).run();
 	return key;
 }
 
@@ -116,12 +120,16 @@ export async function handleApps(request: Request, env: Env, path: string, url: 
 		if (!email) return bad("Please enter your email address.");
 		if (await tooManyTries(db, email)) return bad("Too many wrong passwords. Please wait 15 minutes and try again.", 429);
 		const a = await db.prepare("SELECT * FROM accounts WHERE email = ?").bind(email).first<AccountRow>();
-		if (!a?.password || typeof b.password !== "string" || !(await checkPassword(b.password, a.password))) {
+		// Not an account's own login: perhaps a team member's (team.ts). Alert-only people never sign in.
+		const m = a ? null : await db.prepare("SELECT * FROM members WHERE email = ? AND role != 'alerts' AND accepted_at IS NOT NULL").bind(email).first<MemberRow>().catch(() => null);
+		const hash = a?.password ?? m?.password;
+		if (!hash || typeof b.password !== "string" || !(await checkPassword(b.password, hash))) {
 			await noteFailure(db, email);
 			return bad("That email address or password isn't right.", 401);
 		}
 		await clearFailures(db, email);
-		return json({ key: await newApp(db, a, b.name, b.platform) });
+		if (m) return json({ key: await newApp(db, { id: m.account_id, session_ver: 0 }, b.name, b.platform, m) });
+		return json({ key: await newApp(db, a!, b.name, b.platform) });
 	}
 
 	if (path === "/api/app/redeem" && method === "POST") {

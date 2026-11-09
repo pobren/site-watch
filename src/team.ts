@@ -34,6 +34,8 @@ export function memberMay(a: Pick<AccountRow, "member">, method: string, path: s
 	if (method === "GET") return null;
 	// Their own name, alerts and password are theirs to change (the password is handled before this).
 	if (path === "/api/settings") return null;
+	// Their own app: alerts on it, and signing it out.
+	if (path === "/api/app/push" || path === "/api/app/signout") return null;
 	if (m.role === "viewer") return "Your login can look at everything but not change it. Ask the account's owner if you need to.";
 	if (/^\/api\/(team|keys|billing|account|admin|app\/(devices|qr)|live-link|connector)(\/|$)/.test(path)) return "Only the account's owner can change this.";
 	return null;

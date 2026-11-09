@@ -78,7 +78,7 @@ export const clearCookie = (secure: boolean) => `${COOKIE}=; Path=/; HttpOnly; S
 export const APP_KEY_PREFIX = "swapp_";
 const APP_KEY = /^Bearer (swapp_[0-9a-f]{48})$/;
 
-export interface AppDeviceRow { id: string; account_id: string; name: string; platform: string; token_hash: string; session_ver: number; created_at: string; last_used: string | null }
+export interface AppDeviceRow { id: string; account_id: string; name: string; platform: string; token_hash: string; session_ver: number; created_at: string; last_used: string | null; member_id?: string | null }
 
 /** The app signed in with this request's app key, and its account. Null when there's no key or it no longer works:
  *  removed, or "Sign out everywhere" (or a new password) since it was made. */
@@ -87,8 +87,9 @@ export async function currentApp(request: Request, db: D1Database): Promise<{ de
 	if (!m) return null;
 	const device = await db.prepare("SELECT * FROM app_devices WHERE token_hash = ?").bind(await sha256(m[1])).first<AppDeviceRow>();
 	if (!device) return null;
-	const account = await accountById(db, device.account_id);
-	if (!account || account.session_ver !== device.session_ver) return null;
+	// A team member's app works in their account, as them, until they sign out everywhere or leave the team.
+	const account = device.member_id ? await memberAccount(db, device.member_id, device.session_ver) : await accountById(db, device.account_id);
+	if (!account || (!device.member_id && account.session_ver !== device.session_ver)) return null;
 	// Noted at most once an hour, to keep writes down.
 	if (!device.last_used || Date.now() - Date.parse(device.last_used) > 3_600_000) {
 		await db.prepare("UPDATE app_devices SET last_used = ? WHERE id = ?").bind(iso(new Date()), device.id).run();
