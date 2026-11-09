@@ -1015,3 +1015,46 @@ export const planAllows = (plan: { channels: "email" | "push" | "all" } | null, 
 	if (kind === "email" || c === "all") return true;
 	return (kind === "push" || kind === "apns") && c === "push";
 };
+
+// -- Speed from each region (1.13.0) ---------------------------------------------------------------
+
+/** The helpers in other regions (probe.ts), by Cloudflare location hint. */
+export const HELPER_REGIONS = [
+	{ hint: "weur", name: "west Europe" },
+	{ hint: "enam", name: "east US" },
+	{ hint: "apac", name: "Asia Pacific" },
+];
+
+/** Response times from each region: region hint, then hour (UTC, "2026-11-09T17"), then total ms and checks. */
+export type SpeedLog = Record<string, Record<string, [ms: number, checks: number]>>;
+const SPEED_HOURS = 48;
+
+export function speedLogOf(saved: string | null): SpeedLog {
+	try {
+		const v = saved ? JSON.parse(saved) : {};
+		return v && typeof v === "object" ? v : {};
+	} catch {
+		return {};
+	}
+}
+
+/** Adds one timing (null when the check failed, which isn't counted) and drops hours older than two days. */
+export function addSpeed(log: SpeedLog, region: string, ms: number | null, now: Date): SpeedLog {
+	const hour = now.toISOString().slice(0, 13);
+	const oldest = new Date(now.getTime() - SPEED_HOURS * 3_600_000).toISOString().slice(0, 13);
+	const r = { ...(log[region] ?? {}) };
+	if (ms !== null) { const [t, n] = r[hour] ?? [0, 0]; r[hour] = [t + ms, n + 1]; }
+	for (const h of Object.keys(r)) if (h < oldest) delete r[h];
+	return { ...log, [region]: r };
+}
+
+/** Each region's average and slowest hour over the last 24 hours, in the order given. */
+export function speedSummary(log: SpeedLog, regions: { hint: string; name: string }[], now: Date): { region: string; avg: number; worst: number; hours: { hour: string; ms: number }[] }[] {
+	const from = new Date(now.getTime() - 24 * 3_600_000).toISOString().slice(0, 13);
+	return regions.flatMap((r) => {
+		const hours = Object.entries(log[r.hint] ?? {}).filter(([h, [, n]]) => h > from && n).sort(([a], [b]) => a.localeCompare(b)).map(([hour, [t, n]]) => ({ hour, ms: Math.round(t / n) }));
+		if (!hours.length) return [];
+		const [t, n] = Object.entries(log[r.hint] ?? {}).filter(([h]) => h > from).reduce(([a, b], [, [x, y]]) => [a + x, b + y], [0, 0]);
+		return [{ region: r.name, avg: Math.round(t / n), worst: Math.max(...hours.map((x) => x.ms)), hours }];
+	});
+}

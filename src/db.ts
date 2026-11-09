@@ -56,6 +56,8 @@ export interface SubSend { kind: string; target: string; token: string; subject:
 
 export interface MonitorRow {
 	id: string;
+	/** 1.13.0: response times from each region (core.ts SpeedLog), for plans with speeds. */
+	speeds?: string | null;
 	account_id: string;
 	kind: Kind;
 	name: string | null;
@@ -146,6 +148,8 @@ export interface PlanRow {
 	sub_hooks?: number;
 	/** 1.12.0: 1 when status pages may have a password. */
 	locked?: number;
+	/** 1.13.0: how many websites and APIs are also timed from each region every 5 minutes (0: none). */
+	speeds?: number;
 }
 
 const SCHEMA = [
@@ -249,8 +253,11 @@ const COLUMNS = [
 	"ALTER TABLE accounts ADD COLUMN reports INTEGER NOT NULL DEFAULT 1",
 	"ALTER TABLE accounts ADD COLUMN report_month TEXT",
 	"CREATE UNIQUE INDEX IF NOT EXISTS pages_mail_token ON pages (mail_token)",
+	// 1.13.0: speed from each region (cron.ts regionSpeeds).
+	"ALTER TABLE plans ADD COLUMN speeds INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE monitors ADD COLUMN speeds TEXT",
 ];
-const SCHEMA_VERSION = "11";
+const SCHEMA_VERSION = "12";
 
 let ready: Promise<void> | null = null;
 

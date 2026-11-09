@@ -8,16 +8,13 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { checkJob, type CheckJob } from "./checks.ts";
-import type { Outcome } from "./core.ts";
+import { HELPER_REGIONS, type Outcome } from "./core.ts";
 import { configure } from "./whitelabel.ts";
 import type { Env, MonitorRow } from "./db.ts";
 
-/** The regions asked, in order: the first two, and the third when one of them can't answer. */
-export const REGIONS: { hint: DurableObjectLocationHint; name: string }[] = [
-	{ hint: "weur", name: "west Europe" },
-	{ hint: "enam", name: "east US" },
-	{ hint: "apac", name: "Asia Pacific" },
-];
+/** The regions asked, in order: the first two, and the third when one of them can't answer (core.ts). */
+const REGIONS = HELPER_REGIONS as { hint: DurableObjectLocationHint; name: string }[];
+export { REGIONS };
 /** How long we wait for a helper. Its own checks give up after 15 seconds. */
 const WAIT_MS = 25_000;
 
@@ -31,6 +28,30 @@ export class Probe extends DurableObject<Env> {
 		const r = await checkJob(job);
 		return { state: r.outcome.state, why: "why" in r.outcome ? r.outcome.why : null, ms: r.ms };
 	}
+
+	/** Several checks at once, for speed from each region: how long each took, or null when it didn't work. */
+	async checkMany(jobs: ProbeJob[]): Promise<(number | null)[]> {
+		configure(this.env);
+		const done = await Promise.allSettled(jobs.slice(0, 50).map((j) => checkJob(j)));
+		return done.map((d) => (d.status === "fulfilled" && d.value.outcome.state === "up" ? d.value.ms : null));
+	}
+}
+
+/** Each region's timings for a batch of checks, by region hint. Regions that don't answer are left out. */
+export async function speedsFrom(env: Env, jobs: ProbeJob[]): Promise<Record<string, (number | null)[]>> {
+	const out: Record<string, (number | null)[]> = {};
+	if (!env.PROBES || !jobs.length) return out;
+	await Promise.allSettled(REGIONS.map(async (r) => {
+		const ns = env.PROBES!;
+		const stub = ns.get(ns.idFromName(`probe-${r.hint}`), { locationHint: r.hint }) as unknown as { checkMany(j: ProbeJob[]): Promise<(number | null)[]> };
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			out[r.hint] = await Promise.race([stub.checkMany(jobs), new Promise<never>((_, no) => { timer = setTimeout(() => no(new Error("no answer")), WAIT_MS); })]);
+		} finally {
+			if (timer !== undefined) clearTimeout(timer);
+		}
+	}));
+	return out;
 }
 
 async function ask(env: Env, region: (typeof REGIONS)[number], job: ProbeJob): Promise<View> {

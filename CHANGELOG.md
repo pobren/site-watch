@@ -1,5 +1,10 @@
 # Changes
 
+## 1.13.0: Speed from each region
+
+- **Websites and APIs can be timed from west Europe, east US and Asia Pacific** every 5 minutes, using the same helpers that confirm outages. The dashboard shows each region's average and slowest hour over the last 24 hours.
+- **Plans say how many** get it: "Speed from 3 regions for" on the Admin tab's plan form (none unless set). The owner gets 25.
+
 ## 1.12.0: Badge, private pages, notices by email and monthly reports
 
 - **Status badge and widget** for people's own websites, on every plan, with the code to copy on the Status pages tab.

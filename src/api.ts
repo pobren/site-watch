@@ -13,7 +13,7 @@ import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
 	CHANNEL_NAMES, cleanApiRules, cleanDnsRules, DNS_TYPES, API_METHODS, type ApiRules, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
-	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
+	HELPER_REGIONS, isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, speedLogOf, speedSummary, stateOf, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
 import { DEFAULT_BRAND, hasPro, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { cleanSub, vapidKeys } from "./push.ts";
@@ -50,6 +50,8 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 		uptime30: uptime(s, now, 30), uptime90: uptime(s, now, 90), bars: dailyBars(s, now).map((b) => b.up), responses: responseTimes(s),
 		// Failing only from our own check: the regions that could still reach it (probe.ts).
 		regional: s.regional && isDown(s) ? s.regional.ok : null,
+		// Speed from each region over the last 24 hours, for plans that include it.
+		speeds: r.speeds ? speedSummary(speedLogOf(r.speeds), HELPER_REGIONS, now) : [],
 		outages: s.outages.slice(-10).reverse(), checkedAt: r.checked_at, pausedUntil: paused ? r.paused_until : null,
 		pingUrl: r.kind === "heartbeat" && r.token ? `${origin}/hb/${r.token}` : null, lastPing: r.last_ping,
 		cert: cert ? { ...cert, daysLeft: daysLeft(cert.expires, now) } : null,
@@ -727,10 +729,10 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const subscribers = opt(b.subscribers, 1_000_000), subEmails = opt(b.subEmails, 10_000_000), subHooks = opt(b.subHooks, 10_000);
 		if (subscribers === null || subEmails === null || subHooks === null) return bad("Please give the subscriber limits as whole numbers, from 0 up.");
 		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
-			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks, !free && b.locked === true ? 1 : 0];
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks, !free && b.locked === true ? 1 : 0, free ? 0 : Math.min(opt(b.speeds, 10_000) ?? 0, monitors)];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ?, locked = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, locked, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ?, locked = ?, speeds = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, locked, speeds, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);

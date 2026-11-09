@@ -7,10 +7,10 @@ import { monthlyReports } from "./extras.ts";
 import { deliver } from "./alerts.ts";
 import { checkJob, lookupCert, lookupRegistration, type Result } from "./checks.ts";
 import {
-	alertFor, askAgain, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, stateOf, step, weighOpinions,
+	addSpeed, alertFor, askAgain, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, speedLogOf, stateOf, step, weighOpinions,
 	type Cert, type Registration,
 } from "./core.ts";
-import { secondOpinions } from "./probe.ts";
+import { secondOpinions, speedsFrom } from "./probe.ts";
 import { runSends, tellAboutMonitor } from "./subscribers.ts";
 import { publicName } from "./status.ts";
 import { accountById, ensureSchema, install, LIVE_SQL, type AccountRow, type CheckBatch, type Env, type MonitorRow } from "./db.ts";
@@ -33,6 +33,9 @@ const HEARTBEAT_LOOK = 5;
 const HALF_MINUTE = 30;
 /** Alerts kept in the list. */
 const KEEP_ALERTS = 500;
+/** Speed from each region: most timed per run (every 5 minutes), and how many the owner's own install times. */
+const SPEEDS_PER_RUN = 500;
+const OWNER_SPEEDS = 25;
 
 const minutesAgo = (now: Date, mins: number) => iso(new Date(now.getTime() - mins * 60_000 + 20_000));
 
@@ -181,6 +184,7 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 		if (daily.length) await enqueue(env, daily.map((r) => r.id), { daily: true, at: now.getTime() }, "daily_at");
 		await tidy(db, now);
 		await reports(env, now);
+		await regionSpeeds(env, now).catch((e) => console.error("region speeds", e));
 		return;
 	}
 	await inBatches(due, AT_ONCE, async (row) => {
@@ -198,6 +202,33 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 
 	await tidy(db, now);
 	await reports(env, now);
+	await regionSpeeds(env, now).catch((e) => console.error("region speeds", e));
+}
+
+/** Every 5 minutes: websites and APIs on plans with speed from each region are timed from the other regions too. */
+export async function regionSpeeds(env: Env, now: Date): Promise<number> {
+	if (!env.PROBES || now.getUTCMinutes() % 5 !== 2) return 0;
+	const db = env.DB;
+	const { results } = await db.prepare(
+		`SELECT id, kind, url, rules, host, port, speeds FROM (
+			SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.account_id ORDER BY m.created_at, m.id) AS n,
+				CASE WHEN a.role = 'owner' THEN ${OWNER_SPEEDS} ELSE COALESCE(p.speeds, 0) END AS allowed
+			FROM monitors m JOIN accounts a ON a.id = m.account_id LEFT JOIN plans p ON p.id = a.plan
+			WHERE m.kind IN ('website', 'api') AND (m.paused_until IS NULL OR m.paused_until <= ?) AND (a.role = 'owner' OR a.status IN ('active', 'trialing'))
+		) WHERE n <= allowed LIMIT ${SPEEDS_PER_RUN}`,
+	).bind(iso(now)).all<Pick<MonitorRow, "id" | "kind" | "url" | "rules" | "host" | "port" | "speeds">>();
+	const ctx = await contextOf(env);
+	for (let i = 0; i < results.length; i += 50) {
+		const group = results.slice(i, i + 50);
+		const timings = await speedsFrom(env, group.map((r) => ({ kind: r.kind, url: r.url, rules: r.rules, host: r.host, port: r.port, helloName: ctx.helloName })));
+		const writes = group.map((r, j) => {
+			let log = speedLogOf(r.speeds ?? null);
+			for (const [hint, list] of Object.entries(timings)) log = addSpeed(log, hint, list[j] ?? null, now);
+			return db.prepare("UPDATE monitors SET speeds = ? WHERE id = ?").bind(JSON.stringify(log), r.id);
+		});
+		if (writes.length) await db.batch(writes);
+	}
+	return results.length;
 }
 
 /** Last month's uptime reports, every 10 minutes in the first three days of the month (extras.ts). */

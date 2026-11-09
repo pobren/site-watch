@@ -237,6 +237,10 @@ Make the queue first with `npx wrangler queues create site-watch-checks`. The Ad
 
 Checks run from Cloudflare's network, wherever your Worker happens to run. When something fails twice in a row, small helpers in other regions (west Europe and east US, or Asia Pacific when one can't answer) try it too, and the "down" alert only goes if at least one of them agrees. If they can all reach it, the dashboard says it's only failing from the main check and no alert is sent. The helpers are Durable Objects pinned to their region (`PROBES` in `wrangler.jsonc`) and only work while something is failing. Remove the `durable_objects` and `migrations` blocks to check from one place only.
 
+### Speed from each region
+
+Plans can include "Speed from 3 regions" for some websites and APIs (Admin tab). Every 5 minutes the same helpers time them from west Europe, east US and Asia Pacific, and the dashboard shows each region's average and slowest hour over the last day beside the main check. The owner's own install times up to 25. Without the PROBES binding nothing changes.
+
 ## Your own home page and brand
 
 Add a folder of static files to the Worker and people who aren't signed in see its `index.html` at `/`, with sign-in at `/signin` and sign-up at `/signup`. Other files (pricing, terms, privacy, icons) are served as they are. The Worker needs to run first, so it can tell who's signed in:
