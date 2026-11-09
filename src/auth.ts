@@ -103,7 +103,19 @@ export async function currentAccount(request: Request, db: D1Database): Promise<
 	if (!m || Number(m[3]) < Date.now()) return null;
 	if (!sameText(await sign(await sessionKey(db), `${m[1]}.${m[2]}.${m[3]}`), m[4])) return null;
 	const a = await accountById(db, m[1]);
-	return a && a.session_ver === Number(m[2]) ? a : null;
+	if (a) return a.session_ver === Number(m[2]) ? a : null;
+	// A team member (team.ts): their own session, working in the account they belong to.
+	return memberAccount(db, m[1], Number(m[2]));
+}
+
+export interface MemberRow { id: string; account_id: string; email: string; name: string | null; role: "admin" | "viewer" | "alerts"; password: string | null; session_ver: number; alerts: number; token: string | null; token_until: string | null; accepted_at: string | null; created_at: string }
+
+/** The account a signed-in team member works in, marked with who they are. Alert-only people never sign in. */
+export async function memberAccount(db: D1Database, memberId: string, ver: number): Promise<AccountRow | null> {
+	const mem = await db.prepare("SELECT * FROM members WHERE id = ?").bind(memberId).first<MemberRow>().catch(() => null);
+	if (!mem || mem.session_ver !== ver || mem.role === "alerts" || !mem.accepted_at) return null;
+	const a = await accountById(db, mem.account_id);
+	return a ? { ...a, member: { id: mem.id, email: mem.email, name: mem.name, role: mem.role, password: mem.password, session_ver: mem.session_ver, alerts: mem.alerts === 1 } } : null;
 }
 
 /** Ends every session for one account: its old cookies no longer match. */

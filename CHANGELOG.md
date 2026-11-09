@@ -1,5 +1,12 @@
 # Changes
 
+## 1.14.0: Teams
+
+- **Team logins**: invite colleagues as an Admin (changes things, but not billing, the team or keys) or a Viewer (looks only). Each person has their own email and password, and can choose to get the alert emails too.
+- **Alerts only**: add people who just get the alert emails, once they've confirmed their address.
+- **Plans** set the logins included, the Stripe prices for extra logins (added to the same subscription and prorated) and how many alert-only people there may be (Admin tab).
+- Stripe subscriptions with more than one item now find their plan by any item, not just the first.
+
 ## 1.13.0: Speed from each region
 
 - **Websites and APIs can be timed from west Europe, east US and Asia Pacific** every 5 minutes, using the same helpers that confirm outages. The dashboard shows each region's average and slowest hour over the last 24 hours.

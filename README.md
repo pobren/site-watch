@@ -157,6 +157,16 @@ Sign-in, set-up, forgotten password and client sign-up can use [Cloudflare Turns
 
 It switches on once both are there. Remove either one to switch it off.
 
+## Teams
+
+Accounts can give colleagues their own login on the Account tab, and add people who only get the alert emails:
+
+- **Admin**: adds and changes monitors, alerts and status pages, but not billing, the team, API keys or the account.
+- **Viewer**: sees everything but can't change it.
+- **Alerts only**: no login. They confirm their email address once, then get every alert email.
+
+Members can also choose to get the alert emails. Plans set the logins included (counting the account's own), the Stripe prices for each extra login (monthly and yearly, added to the same subscription and prorated), and how many alert-only people there may be. The owner has no limits. Team members sign in on the website; the apps sign in with the account's own login for now.
+
 ## Selling to clients
 
 1. In Stripe, make a product for each plan with a monthly or yearly price.

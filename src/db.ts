@@ -85,6 +85,8 @@ export interface MonitorRow {
 export interface AccountRow {
 	id: string;
 	email: string;
+	/** 1.14.0: set when a team member (team.ts) is signed in rather than the account's own login. */
+	member?: { id: string; email: string; name: string | null; role: "admin" | "viewer"; password: string | null; session_ver: number; alerts: boolean };
 	/** 1.12.0: 1 for the monthly uptime report (paid plans), and the last month sent. */
 	reports?: number;
 	report_month?: string | null;
@@ -150,6 +152,12 @@ export interface PlanRow {
 	locked?: number;
 	/** 1.13.0: how many websites and APIs are also timed from each region every 5 minutes (0: none). */
 	speeds?: number;
+	/** 1.14.0: logins included, counting the account's own (0: just theirs); Stripe prices for each extra login,
+	 *  monthly and yearly; and how many people may get alerts without a login. */
+	seats?: number;
+	seat_price?: string | null;
+	seat_price_year?: string | null;
+	alert_people?: number;
 }
 
 const SCHEMA = [
@@ -256,8 +264,17 @@ const COLUMNS = [
 	// 1.13.0: speed from each region (cron.ts regionSpeeds).
 	"ALTER TABLE plans ADD COLUMN speeds INTEGER NOT NULL DEFAULT 0",
 	"ALTER TABLE monitors ADD COLUMN speeds TEXT",
+	// 1.14.0: team logins and people who only get alerts (team.ts).
+	`CREATE TABLE IF NOT EXISTS members (
+		id TEXT PRIMARY KEY, account_id TEXT NOT NULL, email TEXT NOT NULL UNIQUE, name TEXT, role TEXT NOT NULL, password TEXT,
+		session_ver INTEGER NOT NULL DEFAULT 0, alerts INTEGER NOT NULL DEFAULT 0, token TEXT UNIQUE, token_until TEXT, accepted_at TEXT, created_at TEXT NOT NULL)`,
+	"CREATE INDEX IF NOT EXISTS members_account ON members (account_id)",
+	"ALTER TABLE plans ADD COLUMN seats INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE plans ADD COLUMN seat_price TEXT",
+	"ALTER TABLE plans ADD COLUMN seat_price_year TEXT",
+	"ALTER TABLE plans ADD COLUMN alert_people INTEGER NOT NULL DEFAULT 0",
 ];
-const SCHEMA_VERSION = "12";
+const SCHEMA_VERSION = "13";
 
 let ready: Promise<void> | null = null;
 

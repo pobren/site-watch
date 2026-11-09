@@ -3,6 +3,7 @@
 
 import { REGIONS } from "./probe.ts";
 import { canLock, updateAddress } from "./extras.ts";
+import { handleTeam, memberMay, memberView, teamLimits, teamOf } from "./team.ts";
 import { emailsThisMonth, HOOK_NAMES, subLimits, tellSubscribers } from "./subscribers.ts";
 import { appTo, deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
 import { apnsReady } from "./apns.ts";
@@ -97,7 +98,11 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 	]);
 	const subCounts = new Map((await db.prepare("SELECT page_id, COUNT(*) AS n FROM subscribers WHERE account_id = ? AND confirmed_at IS NOT NULL GROUP BY page_id").bind(me.id).all<{ page_id: string; n: number }>()).results.map((r) => [r.page_id, r.n]));
 	const out: Record<string, unknown> = {
-		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null, reports: me.reports !== 0 },
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null, reports: me.reports !== 0,
+			// Signed in as a team member: who they are and what they may do (team.ts).
+			member: me.member ? { email: me.member.email, name: me.member.name, role: me.member.role, alerts: me.member.alerts } : null },
+		// The team, for the account's own login: logins and alert-only people, and what the plan includes.
+		team: me.member ? null : { members: (await teamOf(db, me.id)).map(memberView), ...(await teamLimits(db, me)) },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		// Phones waiting for their code are listed under phones.pending, not here. Only webhooks show their secret.
@@ -221,9 +226,13 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	const db = env.DB;
 	const auth = await handleAuth(request, env, path, url);
 	if (auth) return auth;
+	// Team members (team.ts): viewers only look, and admins can't touch billing, the team or keys.
+	const signedIn = await currentAccount(request, db);
+	const refused = signedIn ? memberMay(signedIn, request.method, path) : null;
+	if (refused) return bad(refused, 403);
 	const apps = await handleApps(request, env, path, url);
 	if (apps) return apps;
-	const me = await currentAccount(request, db);
+	const me = signedIn;
 	const billing = await handleBilling(request, env, path, url, me);
 	if (billing) return billing;
 	if (!me) return bad("Please sign in.", 401);
@@ -241,6 +250,13 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	const readable = method === "GET" && (path === "/api/pages/name" || /^\/api\/pages\/[0-9a-f]{12}\/domain$/.test(path));
 	if (method !== "POST" && method !== "DELETE" && !readable) return bad("Not found", 404);
 	const b = method === "POST" ? await body(request) : {};
+
+	// -- The team (team.ts): only the account's own login gets here. --
+	if (path === "/api/team" || path.startsWith("/api/team/")) {
+		const problem = await handleTeam(request, env, me, path, method, b, url.origin);
+		if (problem) return bad(problem.error, problem.status);
+		return json(await everything(env, me, url.origin));
+	}
 
 	// -- API keys and the AI connector (Account tab). Only from the signed-in page, never with a key. --
 	if (path === "/api/keys" && method === "POST") {
@@ -440,6 +456,12 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 
 	// -- Your settings --
 	if (path === "/api/settings" && method === "POST") {
+		// A team member's own name, and whether they get the alert emails too. Everything else is the account's.
+		if (me.member) {
+			if ("name" in b) await db.prepare("UPDATE members SET name = ? WHERE id = ?").bind(cleanName(b.name, 80), me.member.id).run();
+			if (typeof b.alerts === "boolean") await db.prepare("UPDATE members SET alerts = ? WHERE id = ?").bind(b.alerts ? 1 : 0, me.member.id).run();
+			return reply({ ok: true });
+		}
 		let alertTo = me.alert_to;
 		if ("alertTo" in b) {
 			if (b.alertTo === "" || b.alertTo === null) alertTo = null;
@@ -729,10 +751,11 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const subscribers = opt(b.subscribers, 1_000_000), subEmails = opt(b.subEmails, 10_000_000), subHooks = opt(b.subHooks, 10_000);
 		if (subscribers === null || subEmails === null || subHooks === null) return bad("Please give the subscriber limits as whole numbers, from 0 up.");
 		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
-			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks, !free && b.locked === true ? 1 : 0, free ? 0 : Math.min(opt(b.speeds, 10_000) ?? 0, monitors)];
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks, !free && b.locked === true ? 1 : 0, free ? 0 : Math.min(opt(b.speeds, 10_000) ?? 0, monitors),
+			free ? 0 : opt(b.seats, 1000) ?? 0, free ? null : priceId(b.seatPrice), free ? null : priceId(b.seatPriceYear), free ? 0 : opt(b.alertPeople, 1000) ?? 0];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ?, locked = ?, speeds = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, locked, speeds, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ?, locked = ?, speeds = ?, seats = ?, seat_price = ?, seat_price_year = ?, alert_people = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, locked, speeds, seats, seat_price, seat_price_year, alert_people, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);

@@ -82,7 +82,7 @@ export async function listApps(db: D1Database, accountId: string, sessionVer: nu
 export async function deleteAccount(db: D1Database, id: string): Promise<void> {
 	await db.batch([
 		db.prepare("DELETE FROM notices WHERE page_id IN (SELECT id FROM pages WHERE account_id = ?)").bind(id),
-		...["pages", "monitors", "channels", "alerts", "api_keys", "oauth_codes", "oauth_tokens", "app_devices", "app_codes", "subscribers", "sub_sends"].map((t) => db.prepare(`DELETE FROM ${t} WHERE account_id = ?`).bind(id)),
+		...["pages", "monitors", "channels", "alerts", "api_keys", "oauth_codes", "oauth_tokens", "app_devices", "app_codes", "subscribers", "sub_sends", "members"].map((t) => db.prepare(`DELETE FROM ${t} WHERE account_id = ?`).bind(id)),
 		db.prepare("DELETE FROM accounts WHERE id = ? AND role = 'client'").bind(id),
 	]);
 }

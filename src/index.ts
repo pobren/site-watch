@@ -25,6 +25,7 @@ import { SERVICE_WORKER } from "./push.ts";
 import { configure, WL } from "./whitelabel.ts";
 import { handleConnector, isConnectorPath } from "./connect.ts";
 import { findPage, renderStatus } from "./status.ts";
+import { confirmAlerts } from "./team.ts";
 import { badge, handleUnlock, handleUpdateEmail, lockedPage, unlocked, widget } from "./extras.ts";
 import { renderLive } from "./live.ts";
 import { feed, handleSubscribe, handleSubscriptionLink } from "./subscribers.ts";
@@ -33,7 +34,7 @@ import { appPage, connectPage } from "./ui.ts";
 
 export { Probe } from "./probe.ts";
 
-const VERSION = "1.13.0";
+const VERSION = "1.14.0";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -101,6 +102,9 @@ export default {
 		}
 
 		// Status page subscribers (subscribers.ts): the links in their emails, the form and the feed.
+		// Someone agreeing to get a team's alerts (team.ts).
+		const team = /^\/team\/alerts\/([0-9a-f]{48})\/?$/.exec(path);
+		if (team) return withHeaders(await confirmAlerts(env, team[1]));
 		const link = /^\/subscriptions\/(confirm|unsubscribe)\/([0-9a-f]{32})\/?$/.exec(path);
 		if (link) return withHeaders(await handleSubscriptionLink(request, env, link[1], link[2]));
 		// Status page extras (extras.ts): the badge and widget for other websites, and the password form.
