@@ -8,6 +8,10 @@
 	"d1_databases": [{ "binding": "DB", "database_name": "site-watch" }],
 	// Alerts by email (optional): needs a domain on this account with Email Routing on. See the README.
 	"send_email": [{ "name": "EMAIL" }],
+	// Optional: helpers in other regions that confirm a failure before a "down" alert goes (src/probe.ts). They only
+	// run when something is failing, so they cost next to nothing. Remove both blocks to check from one place only.
+	"durable_objects": { "bindings": [{ "name": "PROBES", "class_name": "Probe" }] },
+	"migrations": [{ "tag": "probes-1", "new_sqlite_classes": ["Probe"] }],
 	// Checks whatever is due, every minute.
 	"triggers": { "crons": ["* * * * *"] },
 	"observability": { "enabled": true }

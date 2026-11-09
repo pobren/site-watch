@@ -7,6 +7,7 @@
 import type { ApnsEnv } from "./apns.ts";
 import type { PhoneEnv } from "./phones.ts";
 import type { WhiteLabelEnv } from "./whitelabel.ts";
+import type { Kind } from "./core.ts";
 
 export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 	DB: D1Database;
@@ -36,16 +37,29 @@ export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 	CF_API_TOKEN?: string;
 	/** What customers point their CNAME at, such as domains.example.com (the zone's fallback origin). */
 	DOMAIN_TARGET?: string;
+	/** Optional helpers in other regions that confirm a failure before a "down" alert goes (probe.ts). */
+	PROBES?: DurableObjectNamespace;
+	/** Optional Amazon SES keys for emails to status page subscribers (cheaper for big lists than the EMAIL binding).
+	 *  The sending address (Admin, "alerts come from") must be verified in SES. */
+	SES_ACCESS_KEY_ID?: string;
+	SES_SECRET_ACCESS_KEY?: string;
+	SES_REGION?: string;
+	/** Optional: the domain whose email Cloudflare Email Routing sends to this Worker, for posting notices by email
+	 *  (update-<token>@UPDATE_DOMAIN, extras.ts). */
+	UPDATE_DOMAIN?: string;
 }
 
 /** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */
 /** `at`: when the checks are meant to run (half a minute ahead for the second look at 30 second checks). */
-export interface CheckBatch { ids: string[]; daily?: boolean; late?: boolean; at: number }
+export interface CheckBatch { ids: string[]; daily?: boolean; late?: boolean; at: number; /** 1.11.0: a batch of subscriber messages instead (subscribers.ts). */ sends?: SubSend[] }
+export interface SubSend { kind: string; target: string; token: string; subject: string; text: string; from: string; fromName: string; unsub: string; look?: { colour: string | null; logo: string | null; name: string } }
 
 export interface MonitorRow {
 	id: string;
+	/** 1.13.0: response times from each region (core.ts SpeedLog), for plans with speeds. */
+	speeds?: string | null;
 	account_id: string;
-	kind: "website" | "mail" | "port" | "heartbeat";
+	kind: Kind;
 	name: string | null;
 	url: string | null;
 	host: string | null;
@@ -71,6 +85,11 @@ export interface MonitorRow {
 export interface AccountRow {
 	id: string;
 	email: string;
+	/** 1.14.0: set when a team member (team.ts) is signed in rather than the account's own login. */
+	member?: { id: string; email: string; name: string | null; role: "admin" | "viewer"; password: string | null; session_ver: number; alerts: boolean };
+	/** 1.12.0: 1 for the monthly uptime report (paid plans), and the last month sent. */
+	reports?: number;
+	report_month?: string | null;
 	name: string | null;
 	password: string | null;
 	role: "owner" | "client";
@@ -125,6 +144,20 @@ export interface PlanRow {
 	phone_alerts?: number;
 	/** 1.8.0: how many things may be checked every 30 seconds (0: none). */
 	fast?: number;
+	/** 1.11.0: email subscribers across the account's status pages, emails to them a month, and chat or webhook subscribers. */
+	subscribers?: number;
+	sub_emails?: number;
+	sub_hooks?: number;
+	/** 1.12.0: 1 when status pages may have a password. */
+	locked?: number;
+	/** 1.13.0: how many websites and APIs are also timed from each region every 5 minutes (0: none). */
+	speeds?: number;
+	/** 1.14.0: logins included, counting the account's own (0: just theirs); Stripe prices for each extra login,
+	 *  monthly and yearly; and how many people may get alerts without a login. */
+	seats?: number;
+	seat_price?: string | null;
+	seat_price_year?: string | null;
+	alert_people?: number;
 }
 
 const SCHEMA = [
@@ -156,6 +189,14 @@ const SCHEMA = [
 	`CREATE TABLE IF NOT EXISTS notices (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, page_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
 		impact TEXT NOT NULL DEFAULT 'minor', created_at TEXT NOT NULL, resolved_at TEXT)`,
+	// 1.11.0: people and chat rooms following a status page. kind: email, slack, discord, teams, google or webhook.
+	// target is the email address or the incoming webhook address; monitors a JSON list (null: everything on the page).
+	`CREATE TABLE IF NOT EXISTS subscribers (
+		id TEXT PRIMARY KEY, page_id TEXT NOT NULL, account_id TEXT NOT NULL, kind TEXT NOT NULL, target TEXT NOT NULL, monitors TEXT,
+		token TEXT NOT NULL UNIQUE, confirmed_at TEXT, created_at TEXT NOT NULL, ip TEXT, UNIQUE (page_id, kind, target))`,
+	"CREATE INDEX IF NOT EXISTS subscribers_page ON subscribers (page_id, confirmed_at)",
+	// Emails sent to subscribers each month, for the plan's fair use limit.
+	"CREATE TABLE IF NOT EXISTS sub_sends (account_id TEXT NOT NULL, month TEXT NOT NULL, emails INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (account_id, month))",
 	// 1.2.0: API keys (keys.ts) and the AI connector's sign-in (oauth.ts). Keys, codes and tokens are kept as SHA-256 hashes.
 	`CREATE TABLE IF NOT EXISTS api_keys (
 		id TEXT PRIMARY KEY, account_id TEXT NOT NULL, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, hint TEXT NOT NULL,
@@ -207,8 +248,36 @@ const COLUMNS = [
 	"ALTER TABLE pages ADD COLUMN support TEXT",
 	"ALTER TABLE pages ADD COLUMN colour TEXT",
 	"ALTER TABLE plans ADD COLUMN fast INTEGER NOT NULL DEFAULT 0",
+	// 1.11.0: status page subscribers (subscribers.ts).
+	"ALTER TABLE plans ADD COLUMN subscribers INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE plans ADD COLUMN sub_emails INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE plans ADD COLUMN sub_hooks INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE pages ADD COLUMN auto_notify INTEGER NOT NULL DEFAULT 1",
+	"ALTER TABLE pages ADD COLUMN subscribe INTEGER NOT NULL DEFAULT 1",
+	// 1.12.0: password protected pages, posting notices by email and the monthly report (extras.ts).
+	"ALTER TABLE plans ADD COLUMN locked INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE pages ADD COLUMN password TEXT",
+	"ALTER TABLE pages ADD COLUMN mail_token TEXT",
+	"ALTER TABLE accounts ADD COLUMN reports INTEGER NOT NULL DEFAULT 1",
+	"ALTER TABLE accounts ADD COLUMN report_month TEXT",
+	"CREATE UNIQUE INDEX IF NOT EXISTS pages_mail_token ON pages (mail_token)",
+	// 1.13.0: speed from each region (cron.ts regionSpeeds).
+	"ALTER TABLE plans ADD COLUMN speeds INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE monitors ADD COLUMN speeds TEXT",
+	// 1.14.0: team logins and people who only get alerts (team.ts).
+	`CREATE TABLE IF NOT EXISTS members (
+		id TEXT PRIMARY KEY, account_id TEXT NOT NULL, email TEXT NOT NULL UNIQUE, name TEXT, role TEXT NOT NULL, password TEXT,
+		session_ver INTEGER NOT NULL DEFAULT 0, alerts INTEGER NOT NULL DEFAULT 0, token TEXT UNIQUE, token_until TEXT, accepted_at TEXT, created_at TEXT NOT NULL)`,
+	"CREATE INDEX IF NOT EXISTS members_account ON members (account_id)",
+	"ALTER TABLE plans ADD COLUMN seats INTEGER NOT NULL DEFAULT 0",
+	"ALTER TABLE plans ADD COLUMN seat_price TEXT",
+	"ALTER TABLE plans ADD COLUMN seat_price_year TEXT",
+	"ALTER TABLE plans ADD COLUMN alert_people INTEGER NOT NULL DEFAULT 0",
+	// 1.15.0: planned maintenance windows on notices (maintenance.ts).
+	"ALTER TABLE notices ADD COLUMN starts_at TEXT",
+	"ALTER TABLE notices ADD COLUMN ends_at TEXT",
 ];
-const SCHEMA_VERSION = "9";
+const SCHEMA_VERSION = "14";
 
 let ready: Promise<void> | null = null;
 

@@ -2,7 +2,7 @@
 // cleaning what you type, what one check means, how a monitor's state moves on, uptime, certificates, domain
 // renewals and the mail server conversation. checks.ts does the network side and cron.ts the scheduling.
 
-export type Kind = "website" | "mail" | "port" | "heartbeat";
+export type Kind = "website" | "api" | "dns" | "mail" | "port" | "heartbeat";
 export type Proto = "smtp" | "imap" | "pop3";
 
 /** Failed checks in a row before we call something down, so one slow answer doesn't send an alert. */
@@ -112,6 +112,109 @@ export function rulesOf(saved: string | null): Rules {
 	}
 }
 
+// -- API and DNS checks (1.10.0) -----------------------------------------------------------------
+
+export const API_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] as const;
+export interface ApiRules extends Rules {
+	method?: (typeof API_METHODS)[number];
+	headers?: Record<string, string>;
+	body?: string;
+	/** A value in the JSON answer, by its path ("status" or "data.items.0.ok"), and what it must equal. */
+	json?: { path: string; equals: string };
+}
+
+/** What an API check sends and expects. Header values work like passwords, so they're never shown back in full. */
+export function cleanApiRules(input: unknown): ApiRules | { error: string } {
+	const base = cleanRules(input);
+	if ("error" in base) return base;
+	const r = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+	const out: ApiRules = { ...base };
+	const method = typeof r.method === "string" ? r.method.toUpperCase() : "GET";
+	if (!(API_METHODS as readonly string[]).includes(method)) return { error: "Please choose GET, POST, PUT, PATCH, DELETE or HEAD." };
+	if (method !== "GET") out.method = method as ApiRules["method"];
+	if (r.headers && typeof r.headers === "object") {
+		const list = Object.entries(r.headers as Record<string, unknown>).filter(([k, v]) => k.trim() && typeof v === "string");
+		if (list.length > 10) return { error: "Please use 10 headers or fewer." };
+		const headers: Record<string, string> = {};
+		for (const [k, v] of list) {
+			const name = k.trim();
+			if (!/^[A-Za-z0-9-]{1,60}$/.test(name)) return { error: `"${name}" isn't a header name we can send. Use letters, numbers and dashes.` };
+			if (/^(host|content-length|connection|transfer-encoding)$/i.test(name)) return { error: `The ${name} header is set for you.` };
+			if ((v as string).length > 2000 || /[\r\n]/.test(v as string)) return { error: `The ${name} header is too long or has a line break.` };
+			headers[name] = v as string;
+		}
+		if (Object.keys(headers).length) out.headers = headers;
+	}
+	if (typeof r.body === "string" && r.body.trim()) {
+		if (method === "GET" || method === "HEAD") return { error: "GET and HEAD requests can't send a body. Choose POST or PUT instead." };
+		if (r.body.length > 4000) return { error: "Please keep the body under 4,000 characters." };
+		out.body = r.body;
+	}
+	const j = r.json as Record<string, unknown> | undefined;
+	if (j && typeof j.path === "string" && j.path.trim()) {
+		const path = j.path.trim().replace(/^\$\.?/, "");
+		if (!/^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+){0,9}$/.test(path)) return { error: "Please give the JSON value as a path like status or data.items.0.ok." };
+		out.json = { path, equals: String(j.equals ?? "").slice(0, 200) };
+	}
+	return out;
+}
+
+/** The value at a dotted path in parsed JSON, or undefined. */
+export function jsonAt(data: unknown, path: string): unknown {
+	let at: unknown = data;
+	for (const part of path.split(".")) {
+		if (at === null || typeof at !== "object") return undefined;
+		at = (at as Record<string, unknown>)[part];
+	}
+	return at;
+}
+
+/** One API call with its rules: under 400 counts as working unless a status is set, then the words, time and JSON value. */
+export function apiOutcome(result: { status?: number; error?: string; ms: number; body?: string }, rules: ApiRules): Outcome {
+	if (result.error !== undefined) return classify(result);
+	const status = result.status ?? 0;
+	if (rules.status === undefined && status >= 400) return status >= 500 ? classify(result) : { state: "down", why: `it answered with status ${status}` };
+	const page = pageOutcome(result, rules);
+	if (page.state !== "up" || !rules.json) return page;
+	let data: unknown;
+	try {
+		data = JSON.parse(result.body ?? "");
+	} catch {
+		return { state: "down", why: "its answer wasn't JSON" };
+	}
+	const got = jsonAt(data, rules.json.path);
+	if (got === undefined) return { state: "down", why: `its answer has no ${rules.json.path}` };
+	const text = typeof got === "string" ? got : JSON.stringify(got);
+	if (text !== rules.json.equals) return { state: "down", why: `${rules.json.path} was ${text.slice(0, 60)}, not ${rules.json.equals}` };
+	return page;
+}
+
+export const DNS_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "CAA"] as const;
+export interface DnsRules { type: (typeof DNS_TYPES)[number]; /** Words one of the answers must contain, such as an address or mail server. */ expect?: string }
+
+export function cleanDnsRules(input: unknown): DnsRules | { error: string } {
+	const r = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+	const type = typeof r.type === "string" ? r.type.toUpperCase() : "A";
+	if (!(DNS_TYPES as readonly string[]).includes(type)) return { error: "Please choose a record type: A, AAAA, CNAME, MX, TXT, NS or CAA." };
+	const out: DnsRules = { type: type as DnsRules["type"] };
+	if (typeof r.expect === "string" && r.expect.trim()) out.expect = r.expect.trim().slice(0, 200);
+	return out;
+}
+
+/** A DNS over HTTPS answer (application/dns-json): Status 0 is fine, 3 is "no such name". */
+export interface DohAnswer { Status: number; Answer?: { type: number; data: string }[] }
+const DNS_CODES: Record<string, number> = { A: 1, NS: 2, CNAME: 5, MX: 15, TXT: 16, AAAA: 28, CAA: 257 };
+
+export function dnsOutcome(result: { answer?: DohAnswer; error?: string }, host: string, rules: DnsRules): Outcome {
+	if (result.error !== undefined || !result.answer) return { state: "down", why: "the DNS lookup didn't answer" };
+	if (result.answer.Status === 3) return { state: "down", why: `${host} doesn't exist in DNS any more` };
+	if (result.answer.Status !== 0) return { state: "down", why: `the DNS lookup failed (code ${result.answer.Status})` };
+	const records = (result.answer.Answer ?? []).filter((a) => a.type === DNS_CODES[rules.type]).map((a) => a.data.replace(/^"|"$/g, ""));
+	if (!records.length) return { state: "down", why: `${host} has no ${rules.type} records` };
+	if (rules.expect && !records.some((d) => d.toLowerCase().includes(rules.expect!.toLowerCase()))) return { state: "down", why: `its ${rules.type} records no longer include ${rules.expect} (found ${records.slice(0, 3).join(", ").slice(0, 120)})` };
+	return { state: "up" };
+}
+
 // -- What one check means -----------------------------------------------------------------------
 
 export type Outcome = { state: "up" } | { state: "down" | "cert" | "blocked"; why: string };
@@ -174,8 +277,12 @@ export interface State {
 	ms: number | null;
 	/** Set while it keeps going up and down: when the one alert about it went. */
 	flapping: string | null;
+	/** Set while it only fails from our own check: when other regions last said they could reach it, and which. */
+	regional?: { at: string; ok: string[] } | null;
+	/** The last time a website or API check failed: when, why, and what it answered (checks.ts FailDetail). */
+	lastFail?: { at: string; why: string | null; status: number | null; headers: Record<string, string>; body: string } | null;
 }
-export const NEW_STATE: State = { fails: 0, since: null, why: null, alerted: false, certFails: 0, certProblem: null, blockedFails: 0, blocked: null, outages: [], days: {}, hours: {}, ms: null, flapping: null };
+export const NEW_STATE: State = { fails: 0, since: null, why: null, alerted: false, certFails: 0, certProblem: null, blockedFails: 0, blocked: null, outages: [], days: {}, hours: {}, ms: null, flapping: null, regional: null };
 
 export function stateOf(saved: string | null): State {
 	try {
@@ -186,7 +293,7 @@ export function stateOf(saved: string | null): State {
 }
 
 export type Event =
-	| { kind: "down"; why: string; since: string }
+	| { kind: "down"; why: string; since: string; confirmed?: string[] }
 	| { kind: "up"; outage: Outage }
 	| { kind: "cert"; why: string }
 	| { kind: "flapping"; outages: number }
@@ -255,6 +362,7 @@ export function step(s: State, o: Outcome, now: Date, ms: number | null = null):
 		if (!last || Date.parse(last.to) <= now.getTime() - FLAP_QUIET_MS) next.flapping = null;
 	}
 	next.fails = 0;
+	next.regional = null;
 	next.since = null;
 	next.why = null;
 	next.alerted = false;
@@ -543,6 +651,15 @@ export function labelOf(m: MonitorLike): string {
 		}
 	}
 	if (m.kind === "heartbeat") return "Heartbeat";
+	if (m.kind === "api") {
+		try {
+			const u = new URL(m.url ?? "");
+			return `${u.hostname}${u.pathname}`;
+		} catch {
+			return m.url ?? "API";
+		}
+	}
+	if (m.kind === "dns") return `${m.host} DNS`;
 	return `${m.host}:${m.port}`;
 }
 
@@ -588,19 +705,37 @@ const EVENT_TYPE: Record<Event["kind"], WebhookType> = { down: "monitor.down", u
 
 const ADVICE: Record<Kind, string> = {
 	website: "Worth checking: your hosting company's status page, whether a payment for the hosting has failed, and any recent change to the website or its DNS records. If it works for you, a firewall or security plugin may be blocking Cloudflare's addresses.",
+	api: "Worth checking: your API's logs and recent deploys, whether a key or token it needs has run out, and your hosting company's status page.",
+	dns: "Worth checking: your DNS provider's dashboard for recent changes, whether the domain's registration has lapsed, and whether its name servers changed.",
 	mail: "Worth checking: your mail provider's status page, whether a payment has failed, and any recent change to the server, its firewall or its DNS records.",
 	port: "Worth checking: whether the service on that port is running, the server's firewall, and any recent change to its DNS records.",
 	heartbeat: "This usually means the job didn't run, or ran but failed before it could check in. Worth checking: the job's own log, the server it runs on, and whether its schedule changed.",
 };
 
 /** The alert for one event, in plain words. `tz` is the time zone from Settings. */
+const listOf = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
+
+/** Where a failure was confirmed, or why it wasn't: after the "down" step, with what other regions saw. Only us failing
+ *  holds the alert back and notes which regions can reach it; any region agreeing lets the alert go, naming them. */
+export function weighOpinions(next: State, events: Event[], views: { region: string; state: string }[] | null, now: Date): { next: State; events: Event[] } {
+	const down = events.find((e) => e.kind === "down") as Extract<Event, { kind: "down" }> | undefined;
+	if (!down || !views?.length) return { next: { ...next, regional: null }, events };
+	const agree = views.filter((v) => v.state === "down").map((v) => v.region);
+	if (agree.length) return { next: { ...next, regional: null }, events: events.map((e) => (e === down ? { ...down, confirmed: agree } : e)) };
+	return { next: { ...next, alerted: false, regional: { at: iso(now), ok: views.map((v) => v.region) } }, events: events.filter((e) => e !== down) };
+}
+
+/** While only we see it failing, other regions are asked again at most this often. */
+export const REGIONAL_RECHECK_MS = 10 * 60_000;
+export const askAgain = (s: State, now: Date) => !s.regional || now.getTime() - Date.parse(s.regional.at) >= REGIONAL_RECHECK_MS;
+
 export function alertFor(m: MonitorLike & { every: number }, e: Event, tz: string, link: string, app = "Site Watch"): Alert {
 	return { ...alertText(m, e, tz, link, app), type: EVENT_TYPE[e.kind] };
 }
 
 function alertText(m: MonitorLike & { every: number }, e: Event, tz: string, link: string, app: string): Alert {
 	const label = labelOf(m);
-	const what = m.kind === "website" ? m.url : m.kind === "heartbeat" ? `the "${label}" heartbeat` : `${m.host} port ${m.port}`;
+	const what = m.kind === "website" ? m.url : m.kind === "api" ? `the API at ${m.url}` : m.kind === "dns" ? `the DNS for ${m.host}` : m.kind === "heartbeat" ? `the "${label}" heartbeat` : `${m.host} port ${m.port}`;
 	const end = `Open ${app}: ${link}`;
 	const apart = m.every < 1 ? `${Math.round(m.every * 60)} seconds apart` : m.every === 1 ? "a minute apart" : `${m.every} minutes apart`;
 	switch (e.kind) {
@@ -610,7 +745,7 @@ function alertText(m: MonitorLike & { every: number }, e: Event, tz: string, lin
 				urgent: true,
 				text: [
 					m.kind === "heartbeat" ? `We haven't heard from ${what} since about ${timeIn(e.since, tz)}: ${e.why}.`
-						: `${what} stopped working at about ${timeIn(e.since, tz)}: ${e.why}. We tried twice, ${apart}, before telling you.`,
+						: `${what} stopped working at about ${timeIn(e.since, tz)}: ${e.why}. We tried twice, ${apart}${e.confirmed?.length ? `, and our checks from ${listOf(e.confirmed)} found the same,` : ""} before telling you.`,
 					"We'll keep checking and tell you once more when it's back. There won't be more alerts about this outage until then.",
 					ADVICE[m.kind], end,
 				].join("\n\n"),
@@ -814,12 +949,12 @@ export const cleanEmail = (input: unknown): string | null => {
 };
 
 /** An email as raw MIME, for Cloudflare's send_email binding: plain text, or text and HTML side by side. */
-export function rawEmail(from: string, to: string, subject: string, text: string, now: Date, id: string, fromName = "Site Watch", html?: string): string {
+export function rawEmail(from: string, to: string, subject: string, text: string, now: Date, id: string, fromName = "Site Watch", html?: string, extra: string[] = []): string {
 	const enc = (s: string) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(s)}?=`);
 	const wrap = (s: string) => b64(s).replace(/.{76}/g, "$&\r\n");
 	const head = [
 		`From: ${enc(fromName.replace(/["<>\r\n]/g, ""))} <${from}>`, `To: ${to}`, `Subject: ${enc(subject)}`, `Date: ${now.toUTCString()}`,
-		`Message-ID: <${id}@${from.split("@")[1]}>`, "MIME-Version: 1.0", "Auto-Submitted: auto-generated",
+		`Message-ID: <${id}@${from.split("@")[1]}>`, "MIME-Version: 1.0", "Auto-Submitted: auto-generated", ...extra.filter((l) => !/[\r\n]/.test(l)),
 	];
 	if (!html) return [...head, "Content-Type: text/plain; charset=utf-8", "Content-Transfer-Encoding: base64", "", wrap(text), ""].join("\r\n");
 	const edge = `sw-${id}`;
@@ -882,3 +1017,61 @@ export const planAllows = (plan: { channels: "email" | "push" | "all" } | null, 
 	if (kind === "email" || c === "all") return true;
 	return (kind === "push" || kind === "apns") && c === "push";
 };
+
+// -- Speed from each region (1.13.0) ---------------------------------------------------------------
+
+/** The helpers in other regions (probe.ts), by Cloudflare location hint. */
+export const HELPER_REGIONS = [
+	{ hint: "weur", name: "west Europe" },
+	{ hint: "enam", name: "east US" },
+	{ hint: "apac", name: "Asia Pacific" },
+];
+
+/** Response times from each region: region hint, then hour (UTC, "2026-11-09T17"), then total ms and checks. */
+export type SpeedLog = Record<string, Record<string, [ms: number, checks: number]>>;
+const SPEED_HOURS = 48;
+
+export function speedLogOf(saved: string | null): SpeedLog {
+	try {
+		const v = saved ? JSON.parse(saved) : {};
+		return v && typeof v === "object" ? v : {};
+	} catch {
+		return {};
+	}
+}
+
+/** Adds one timing (null when the check failed, which isn't counted) and drops hours older than two days. */
+export function addSpeed(log: SpeedLog, region: string, ms: number | null, now: Date): SpeedLog {
+	const hour = now.toISOString().slice(0, 13);
+	const oldest = new Date(now.getTime() - SPEED_HOURS * 3_600_000).toISOString().slice(0, 13);
+	const r = { ...(log[region] ?? {}) };
+	if (ms !== null) { const [t, n] = r[hour] ?? [0, 0]; r[hour] = [t + ms, n + 1]; }
+	for (const h of Object.keys(r)) if (h < oldest) delete r[h];
+	return { ...log, [region]: r };
+}
+
+/** Each region's average and slowest hour over the last 24 hours, in the order given. */
+export function speedSummary(log: SpeedLog, regions: { hint: string; name: string }[], now: Date): { region: string; avg: number; worst: number; hours: { hour: string; ms: number }[] }[] {
+	const from = new Date(now.getTime() - 24 * 3_600_000).toISOString().slice(0, 13);
+	return regions.flatMap((r) => {
+		const hours = Object.entries(log[r.hint] ?? {}).filter(([h, [, n]]) => h > from && n).sort(([a], [b]) => a.localeCompare(b)).map(([hour, [t, n]]) => ({ hour, ms: Math.round(t / n) }));
+		if (!hours.length) return [];
+		const [t, n] = Object.entries(log[r.hint] ?? {}).filter(([h]) => h > from).reduce(([a, b], [, [x, y]]) => [a + x, b + y], [0, 0]);
+		return [{ region: r.name, avg: Math.round(t / n), worst: Math.max(...hours.map((x) => x.ms)), hours }];
+	});
+}
+
+/** Each day's checks and uptime between two dates (YYYY-MM-DD, both included), as CSV with a total line. */
+export function uptimeCsv(name: string, s: Pick<State, "days">, from: string, to: string): string {
+	const q = (v: string) => (/[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+	const lines = ["Date,Checks up,Checks down,Uptime %"];
+	let up = 0, down = 0;
+	for (let d = new Date(`${from}T00:00:00Z`); d.toISOString().slice(0, 10) <= to && lines.length < 400; d = new Date(d.getTime() + 86_400_000)) {
+		const day = d.toISOString().slice(0, 10);
+		const [u, n] = s.days?.[day] ?? [0, 0];
+		up += u; down += n;
+		lines.push(`${day},${u},${n},${u + n ? Math.floor((u / (u + n)) * 10000) / 100 : ""}`);
+	}
+	lines.push(`${q(`${name} ${from} to ${to}`)},${up},${down},${up + down ? Math.floor((up / (up + down)) * 10000) / 100 : ""}`);
+	return lines.join("\r\n") + "\r\n";
+}

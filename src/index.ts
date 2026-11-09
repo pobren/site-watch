@@ -25,11 +25,16 @@ import { SERVICE_WORKER } from "./push.ts";
 import { configure, WL } from "./whitelabel.ts";
 import { handleConnector, isConnectorPath } from "./connect.ts";
 import { findPage, renderStatus } from "./status.ts";
+import { confirmAlerts } from "./team.ts";
+import { badge, handleUnlock, handleUpdateEmail, lockedPage, unlocked, widget } from "./extras.ts";
 import { renderLive } from "./live.ts";
+import { feed, handleSubscribe, handleSubscriptionLink } from "./subscribers.ts";
 import { handleV1 } from "./v1.ts";
 import { appPage, connectPage } from "./ui.ts";
 
-const VERSION = "1.8.1";
+export { Probe } from "./probe.ts";
+
+const VERSION = "1.15.1";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",
@@ -96,9 +101,41 @@ export default {
 			}
 		}
 
+		// Status page subscribers (subscribers.ts): the links in their emails, the form and the feed.
+		// Someone agreeing to get a team's alerts (team.ts).
+		const team = /^\/team\/alerts\/([0-9a-f]{48})\/?$/.exec(path);
+		if (team) return withHeaders(await confirmAlerts(env, team[1]));
+		const link = /^\/subscriptions\/(confirm|unsubscribe)\/([0-9a-f]{32})\/?$/.exec(path);
+		if (link) return withHeaders(await handleSubscriptionLink(request, env, link[1], link[2]));
+		// Status page extras (extras.ts): the badge and widget for other websites, and the password form.
+		const sub = /^(\/status\/[a-z0-9-]{2,40})?\/(subscribe|feed\.atom|badge\.svg|widget|unlock)$/.exec(path);
+		if (sub) {
+			const p = await findPage(env.DB, sub[1] ?? "/", url.hostname, env.PAGE_DOMAIN?.toLowerCase());
+			const base = sub[1] ?? "";
+			if (p && sub[2] === "unlock" && request.method === "POST") return withHeaders(await handleUnlock(request, env, p, base));
+			if (p && sub[2] === "badge.svg") return withHeaders(await badge(env.DB, p), { "access-control-allow-origin": "*" });
+			// The widget goes in an iframe on the customer's own website, so it may be framed anywhere.
+			if (p && sub[2] === "widget") {
+				const res = await widget(env.DB, p, `${url.origin}${base || "/"}`);
+				res.headers.set("x-content-type-options", "nosniff");
+				res.headers.set("content-security-policy", "frame-ancestors *");
+				return res;
+			}
+			// A password protected page's form and feed are only for people who know the password.
+			if (p && !(await unlocked(request, p))) return new Response("This status page is private.", { status: 403, headers: { "content-type": "text/plain; charset=utf-8" } });
+			if (p && sub[2] === "subscribe" && request.method === "POST") return withHeaders(await handleSubscribe(request, env, p));
+			if (p && sub[2] === "feed.atom") return withHeaders(await feed(env, p));
+		}
+
 		if (request.method !== "GET" && request.method !== "HEAD") return new Response("Method not allowed", { status: 405 });
 		const page = await findPage(env.DB, path, url.hostname, env.PAGE_DOMAIN?.toLowerCase());
-		if (page) return withHeaders(await renderStatus(env.DB, page), { "x-frame-options": "SAMEORIGIN" });
+		if (page) {
+			const base = path.startsWith("/status/") ? `/status/${page.slug}` : "";
+			if (!(await unlocked(request, page))) return withHeaders(lockedPage(page, base, (await install(env.DB)).brand.colour), { "x-frame-options": "SAMEORIGIN" });
+			const res = withHeaders(await renderStatus(env.DB, page, base), { "x-frame-options": "SAMEORIGIN" });
+			if (page.password) { res.headers.set("cache-control", "private, no-store"); res.headers.set("x-robots-tag", "noindex"); }
+			return res;
+		}
 
 		const live = /^\/live\/([0-9a-f]{32})\/?$/.exec(path);
 		if (live) return withHeaders(await renderLive(env.DB, live[1]));
@@ -153,5 +190,12 @@ export default {
 		configure(env);
 		await runQueue(env, batch.messages);
 		await sendPhones(env).catch((e) => console.error("phone alerts failed", e));
+	},
+
+	/** Notices posted by email: Cloudflare Email Routing sends update-<token>@UPDATE_DOMAIN here (extras.ts). */
+	async email(message: ForwardableEmailMessage, env: Env): Promise<void> {
+		configure(env);
+		await ensureSchema(env.DB);
+		await handleUpdateEmail(message, env);
 	},
 } satisfies ExportedHandler<Env, CheckBatch>;

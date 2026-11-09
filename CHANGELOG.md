@@ -1,9 +1,61 @@
 # Changes
 
-## 1.8.1
+## 1.15.1: Apps catch up
 
-- The four choices on the Add page (Website, Mail server, Port, Heartbeat) line up at the top, so the chosen one no longer sits lower than the rest.
+- The choices on the Add page line up at the top, so the chosen one no longer sits lower than the rest.
 - Each alert channel on the Alerts tab has its own coloured icon (text messages, WhatsApp, Apple app, browser, Slack, Teams, Google Chat, Discord, webhook), so the list is easier to scan.
+- People who upgrade get a "You're now on Pro" note on their Site Patrol apps.
+- Team logins can sign in to the apps too: viewers look only, admins as on the website.
+
+## 1.15.0: Dashboard extras and planned maintenance
+
+- **What we saw**: when a website or API check fails, the dashboard keeps what it answered: the status, a few headers and the start of the page.
+- **Post to status page**: one click on a monitor that's down posts a notice on every status page showing it, and tells subscribers.
+- **Uptime for any dates**: download a spreadsheet of each day's checks and uptime for dates you choose in the last 90 days.
+- **Planned maintenance windows**: a maintenance notice can have a start and an end. The page shows it as planned, alerts for that page's monitors wait while it runs, and it resolves itself at the end.
+
+## 1.14.0: Teams
+
+- **Team logins**: invite colleagues as an Admin (changes things, but not billing, the team or keys) or a Viewer (looks only). Each person has their own email and password, and can choose to get the alert emails too.
+- **Alerts only**: add people who just get the alert emails, once they've confirmed their address.
+- **Plans** set the logins included, the Stripe prices for extra logins (added to the same subscription and prorated) and how many alert-only people there may be (Admin tab).
+- Stripe subscriptions with more than one item now find their plan by any item, not just the first.
+
+## 1.13.0: Speed from each region
+
+- **Websites and APIs can be timed from west Europe, east US and Asia Pacific** every 5 minutes, using the same helpers that confirm outages. The dashboard shows each region's average and slowest hour over the last 24 hours.
+- **Plans say how many** get it: "Speed from 3 regions for" on the Admin tab's plan form (none unless set). The owner gets 25.
+
+## 1.12.0: Badge, private pages, notices by email and monthly reports
+
+- **Status badge and widget** for people's own websites, on every plan, with the code to copy on the Status pages tab.
+- **Password protected status pages** for staff or clients only, on plans that allow them ("Status pages can have a password" on the Admin tab's plan form).
+- **Post notices by email**: each page can have a private address. Email it from your own address and it's posted and sent to subscribers. Needs `UPDATE_DOMAIN` and Cloudflare Email Routing (see the README).
+- **Monthly uptime report** by email on the first of each month for paid accounts, with uptime and outages for each monitor. It can be turned off on the Account tab.
+- Deleting a status page or an account now removes its subscribers too.
+
+## 1.11.0: Status page subscribers
+
+- **Visitors can subscribe** to a status page by email, Slack, Discord, Microsoft Teams, Google Chat, webhook or Atom feed, for everything on the page or only the things they pick. Emails are confirmed by a link first and every email has a one click unsubscribe.
+- **They hear about** notices when you post and resolve them (a tick box on the notice form), and things going down and coming back once our other regions agree (a setting on each page).
+- **Status pages tab**: subscriber count, emails used this month, the list with Remove, and Add subscribers for pasting addresses from a spreadsheet.
+- **Plans** set email subscribers, subscriber emails a month and chat rooms (Admin tab). Free plans have none. If a month's emails would run out, the oldest subscribers still get them and the rest are skipped until next month.
+- **Amazon SES** sends subscriber emails when `SES_ACCESS_KEY_ID`, `SES_SECRET_ACCESS_KEY` and `SES_REGION` are set. Big lists are sent in batches through the CHECKS queue.
+- Status pages now reload without losing what you're typing in the subscribe form.
+- Plans and limits now say "monitors": each web address, API, DNS record, mail server, port or job is one.
+
+## 1.10.0: API and DNS checks
+
+- **API checks**: choose the method, add headers (such as an Authorization token) and a body, and check the status, words, time and a JSON value, such as `status` equals `ok` or `data.ready` equals `true`. Anything under 400 counts as working unless a status is set. Header values only show their first few characters once saved, and editing without touching them keeps them.
+- **DNS checks**: A, AAAA, CNAME, MX, TXT, NS or CAA records through Cloudflare's 1.1.1.1. Down when they vanish, when the name no longer exists, or when they stop including the value you give. Every 5 minutes or slower.
+- Both count as one monitor each, are confirmed from other regions like everything else, and show on status pages and the Live view.
+
+## 1.9.0: Failures confirmed from other regions
+
+- **Before a "down" alert goes**, helpers in two other Cloudflare regions (west Europe and east US, with Asia Pacific if one can't answer) try the same website, mail server or port.
+- **The alert only goes if at least one agrees.** It says where: "our checks from west Europe found the same".
+- **If they can all reach it**, no alert is sent. The dashboard notes that it's only failing from the main check, and the other regions are asked again every 10 minutes.
+- The helpers are Durable Objects (the PROBES binding in wrangler.jsonc). They only run when something is failing, so they cost next to nothing. Without the binding, alerts work as before.
 
 ## 1.8.0: Checks every 30 seconds
 

@@ -7,7 +7,7 @@ import { getMonitor, listAlerts, listMonitors, listPages } from "./v1.ts";
 
 const VERSIONS = ["2025-06-18", "2025-03-26", "2024-11-05"];
 
-const INSTRUCTIONS = `Site Watch watches one person's websites, mail servers, ports and scheduled jobs (heartbeats) and alerts them when something stops working. These tools read what it watches.
+const INSTRUCTIONS = `Site Watch watches one person's websites, APIs, DNS records, mail servers, ports and scheduled jobs (heartbeats) and alerts them when something stops working. These tools read what it watches.
 - status is up, down, cert (a certificate problem), blocked (the server turned the checks away), unsure (one failed check), paused or checking.
 - uptime is the share of checks that found it working, over the last 30 and 90 days.
 - certificate and domain give when a website's certificate and its domain registration run out.
@@ -18,7 +18,7 @@ const TOOLS = [
 	{
 		name: "list_monitors",
 		title: "What's being watched",
-		description: "Every website, mail server, port and heartbeat being watched, with whether it's working now, uptime over 30 and 90 days, response time, certificate expiry and domain renewal date.",
+		description: "Every website, API, DNS record, mail server, port and heartbeat being watched, with whether it's working now, uptime over 30 and 90 days, response time, certificate expiry and domain renewal date.",
 		inputSchema: { type: "object", properties: {} },
 	},
 	{

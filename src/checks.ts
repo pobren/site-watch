@@ -3,7 +3,7 @@
 // What the answers mean is decided in core.ts.
 
 import { connect } from "cloudflare:sockets";
-import { certFromCt, connectWhy, domainOf, iso, mailDialog, mailPort, pageOutcome, rdapExpiry, type Cert, type CtEntry, type MailIo, type Outcome, type Registration, type Rules } from "./core.ts";
+import { apiOutcome, certFromCt, connectWhy, dnsOutcome, domainOf, iso, mailDialog, mailPort, pageOutcome, rdapExpiry, rulesOf, type ApiRules, type Cert, type CtEntry, type DnsRules, type DohAnswer, type Kind, type MailIo, type Outcome, type Registration, type Rules } from "./core.ts";
 
 import { WL } from "./whitelabel.ts";
 
@@ -14,15 +14,26 @@ const SOCKET_TIMEOUT = 10;
 /** The most of a page we read when looking for words. */
 const PAGE_BYTES = 1_000_000;
 
-export interface Result { outcome: Outcome; ms: number | null }
+export interface Result { outcome: Outcome; ms: number | null; detail?: FailDetail }
+/** What a website or API answered when it failed, for the dashboard: the status, a few headers and the start of the page. */
+export interface FailDetail { status: number | null; headers: Record<string, string>; body: string }
+const SHOWN_HEADERS = ["server", "content-type", "content-length", "location", "retry-after", "cache-control", "cf-ray", "cf-cache-status", "x-cache", "via", "date", "x-powered-by"];
+const FAIL_BODY = 1500;
 
-async function readSome(res: Response): Promise<string> {
+async function failDetail(res: Response, body: string | null): Promise<FailDetail> {
+	const headers: Record<string, string> = {};
+	for (const h of SHOWN_HEADERS) { const v = res.headers.get(h); if (v) headers[h] = v.slice(0, 200); }
+	const text = body ?? (await readSome(res, FAIL_BODY).catch(() => ""));
+	return { status: res.status, headers, body: text.slice(0, FAIL_BODY) };
+}
+
+async function readSome(res: Response, most = PAGE_BYTES): Promise<string> {
 	if (!res.body) return "";
 	const reader = res.body.getReader();
 	const decoder = new TextDecoder();
 	let text = "";
 	let bytes = 0;
-	while (bytes < PAGE_BYTES) {
+	while (bytes < most) {
 		const { value, done } = await reader.read();
 		if (done) break;
 		bytes += value.byteLength;
@@ -37,11 +48,59 @@ export async function checkWebsite(url: string, rules: Rules): Promise<Result> {
 	try {
 		const res = await fetch(url, { headers: { "user-agent": agent(), accept: "text/html,*/*" }, redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT * 1000) });
 		const ms = Date.now() - started;
-		const body = rules.contains || rules.missing ? await readSome(res) : (await res.body?.cancel(), "");
-		return { outcome: pageOutcome({ status: res.status, ms, body }, rules), ms };
+		const read = !!(rules.contains || rules.missing);
+		const body = read ? await readSome(res) : "";
+		const outcome = pageOutcome({ status: res.status, ms, body }, rules);
+		const detail = outcome.state === "up" ? undefined : await failDetail(res, read ? body : null);
+		if (!read || outcome.state === "up") await res.body?.cancel().catch(() => undefined);
+		return { outcome, ms, detail };
 	} catch (e) {
-		return { outcome: pageOutcome({ error: e instanceof Error ? `${e.name} ${e.message}` : String(e), ms: Date.now() - started }, rules), ms: null };
+		const why = e instanceof Error ? `${e.name} ${e.message}` : String(e);
+		return { outcome: pageOutcome({ error: why, ms: Date.now() - started }, rules), ms: null, detail: { status: null, headers: {}, body: why } };
 	}
+}
+
+/** An API call: your method, headers and body, then the status, words, time and JSON value. */
+export async function checkApi(url: string, rules: ApiRules): Promise<Result> {
+	const started = Date.now();
+	try {
+		const headers: Record<string, string> = { "user-agent": agent(), accept: "application/json, */*", ...(rules.headers ?? {}) };
+		if (rules.body && !Object.keys(headers).some((k) => k.toLowerCase() === "content-type")) headers["content-type"] = /^\s*[[{]/.test(rules.body) ? "application/json" : "text/plain";
+		const res = await fetch(url, { method: rules.method ?? "GET", headers, body: rules.body, redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT * 1000) });
+		const ms = Date.now() - started;
+		const read = !!(rules.contains || rules.missing || rules.json);
+		const body = read ? await readSome(res) : "";
+		const outcome = apiOutcome({ status: res.status, ms, body }, rules);
+		const detail = outcome.state === "up" ? undefined : await failDetail(res, read ? body : null);
+		if (!read || outcome.state === "up") await res.body?.cancel().catch(() => undefined);
+		return { outcome, ms, detail };
+	} catch (e) {
+		const why = e instanceof Error ? `${e.name} ${e.message}` : String(e);
+		return { outcome: apiOutcome({ error: why, ms: Date.now() - started }, rules), ms: null, detail: { status: null, headers: {}, body: why } };
+	}
+}
+
+/** A DNS lookup through Cloudflare's 1.1.1.1 (DNS over HTTPS), so it sees what the world sees. */
+export async function checkDns(host: string, rules: DnsRules): Promise<Result> {
+	const started = Date.now();
+	try {
+		const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${rules.type}`, { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(SOCKET_TIMEOUT * 1000) });
+		if (!res.ok) return { outcome: dnsOutcome({ error: String(res.status) }, host, rules), ms: null };
+		const answer = await res.json<DohAnswer>();
+		return { outcome: dnsOutcome({ answer }, host, rules), ms: Date.now() - started };
+	} catch (e) {
+		return { outcome: dnsOutcome({ error: String(e) }, host, rules), ms: null };
+	}
+}
+
+/** One check of anything but a heartbeat, from wherever this runs (the cron, the queue or a helper in another region). */
+export interface CheckJob { kind: Kind; url: string | null; rules: string | null; host: string | null; port: number | null; helloName: string }
+export function checkJob(j: CheckJob): Promise<Result> {
+	if (j.kind === "website") return checkWebsite(j.url!, rulesOf(j.rules));
+	if (j.kind === "api") return checkApi(j.url!, rulesOf(j.rules) as ApiRules);
+	if (j.kind === "dns") return checkDns(j.host!, rulesOf(j.rules) as unknown as DnsRules);
+	if (j.kind === "mail") return checkMail(j.host!, j.port!, j.helloName);
+	return checkPort(j.host!, j.port!);
 }
 
 function timeout<T>(secs: number): { promise: Promise<T>; clear: () => void } {

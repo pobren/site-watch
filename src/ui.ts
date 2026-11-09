@@ -134,6 +134,8 @@ const JS = String.raw`
 const ICONS = {
 	pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
 	plus: '<path d="M12 5v14M5 12h14"/>',
+	code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+	list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
 	bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
 	page: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/>',
 	user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
@@ -227,8 +229,8 @@ const tz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone
 const when = (iso) => iso ? new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 const ago = (iso) => { if (!iso) return "never"; const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " hr ago" : Math.round(m / 1440) + " days ago"; };
 const WORDS = { up: "Working", down: "Down", cert: "Certificate problem", blocked: "Turning our checks away", unsure: "Not answering once", paused: "Paused", checking: "Checking…" };
-const KIND = { website: "Website", mail: "Mail server", port: "Port", heartbeat: "Heartbeat" };
-const KIND_ICON = { website: "globe", mail: "mail", port: "plug", heartbeat: "heart" };
+const KIND = { website: "Website", api: "API", dns: "DNS", mail: "Mail server", port: "Port", heartbeat: "Heartbeat" };
+const KIND_ICON = { website: "globe", api: "code", dns: "list", mail: "mail", port: "plug", heartbeat: "heart" };
 const everyWords = (m) => m < 1 ? Math.round(m * 60) + " seconds" : m % 1440 === 0 ? (m === 1440 ? "day" : m / 1440 + " days") : m % 60 === 0 ? (m === 60 ? "hour" : m / 60 + " hours") : m === 1 ? "minute" : m + " minutes";
 
 function logo() {
@@ -315,15 +317,18 @@ function forgotView() {
 
 function resetView() {
 	const token = new URLSearchParams(location.search).get("token") || "";
+	const joining = new URLSearchParams(location.search).get("join") === "1";
+	const nm = h("input", { autocomplete: "name" });
 	const pw = h("input", { type: "password", autocomplete: "new-password", minlength: 10, required: true });
-	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button"), async () => { await api("/api/reset", { token, password: pw.value }); location.href = "/"; }); } },
-		h("h1", null, "Choose a new password"), field("New password", pw, "At least 10 characters."),
+	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(card.querySelector("button[type=submit]"), async () => { await api("/api/reset", { token, password: pw.value, name: nm.value }); location.href = "/"; }); } },
+		h("h1", null, joining ? "Join the team" : "Choose a new password"), joining ? h("p", null, "Choose a password for your own login. You'll sign in with the email address the invitation went to.") : null,
+		joining ? field("Your name", nm) : null, field(joining ? "Password" : "New password", pw, "At least 10 characters."),
 		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("save"), "Save and sign in")));
 	centre(card);
 }
 
 const CHANNEL_WORDS = { email: "email alerts", push: "email and browser alerts", all: "alerts by email, browser, Slack, Teams, Google Chat, Discord and webhook" };
-const planLine = (p) => p.monitors + (p.monitors === 1 ? " website" : " things to watch") + ", checked every " + everyWords(p.minEvery) + (p.fast ? " (" + p.fast + " every 30 seconds)" : "") + ", " + CHANNEL_WORDS[p.channels || "all"] + (p.alertsPerDay ? " (up to " + p.alertsPerDay + " a day)" : "") + (p.pages ? ", " + p.pages + " status page" + (p.pages === 1 ? "" : "s") : "") + (p.phoneAlerts ? ", " + p.phoneAlerts + " text or WhatsApp alerts a month" : "");
+const planLine = (p) => p.monitors + (p.monitors === 1 ? " monitor" : " monitors") + ", checked every " + everyWords(p.minEvery) + (p.fast ? " (" + p.fast + " every 30 seconds)" : "") + ", " + CHANNEL_WORDS[p.channels || "all"] + (p.alertsPerDay ? " (up to " + p.alertsPerDay + " a day)" : "") + (p.pages ? ", " + p.pages + " status page" + (p.pages === 1 ? "" : "s") : "") + (p.phoneAlerts ? ", " + p.phoneAlerts + " text or WhatsApp alerts a month" : "") + (p.subscribers ? ", " + p.subscribers.toLocaleString("en-GB") + " status page subscribers" : "") + (p.locked ? ", password protected status pages" : "") + (p.speeds ? ", speed from 3 regions for " + p.speeds : "") + (p.seats > 1 ? ", " + p.seats + " team logins" : "") + (p.alertPeople ? ", alerts for " + p.alertPeople + " more people" : "");
 
 const BRANDS = {"visa":["Visa","1A1F71","M9.112 8.262L5.97 15.758H3.92L2.374 9.775c-.094-.368-.175-.503-.461-.658C1.447 8.864.677 8.627 0 8.479l.046-.217h3.3a.904.904 0 01.894.764l.817 4.338 2.018-5.102zm8.033 5.049c.008-1.979-2.736-2.088-2.717-2.972.006-.269.262-.555.822-.628a3.66 3.66 0 011.913.336l.34-1.59a5.207 5.207 0 00-1.814-.333c-1.917 0-3.266 1.02-3.278 2.479-.012 1.079.963 1.68 1.698 2.04.756.367 1.01.603 1.006.931-.005.504-.602.725-1.16.734-.975.015-1.54-.263-1.992-.473l-.351 1.642c.453.208 1.289.39 2.156.398 2.037 0 3.37-1.006 3.377-2.564m5.061 2.447H24l-1.565-7.496h-1.656a.883.883 0 00-.826.55l-2.909 6.946h2.036l.405-1.12h2.488zm-2.163-2.656l1.02-2.815.588 2.815zm-8.16-4.84l-1.603 7.496H8.34l1.605-7.496z"],"mastercard":["Mastercard","EB001B","M11.343 18.031c.058.049.12.098.181.146-1.177.783-2.59 1.238-4.107 1.238C3.32 19.416 0 16.096 0 12c0-4.095 3.32-7.416 7.416-7.416 1.518 0 2.931.456 4.105 1.238-.06.051-.12.098-.165.15C9.6 7.489 8.595 9.688 8.595 12c0 2.311 1.001 4.51 2.748 6.031zm5.241-13.447c-1.52 0-2.931.456-4.105 1.238.06.051.12.098.165.15C14.4 7.489 15.405 9.688 15.405 12c0 2.31-1.001 4.507-2.748 6.031-.058.049-.12.098-.181.146 1.177.783 2.588 1.238 4.107 1.238C20.68 19.416 24 16.096 24 12c0-4.094-3.32-7.416-7.416-7.416zM12 6.174c-.096.075-.189.15-.28.231C10.156 7.764 9.169 9.765 9.169 12c0 2.236.987 4.236 2.551 5.595.09.08.185.158.28.232.096-.074.189-.152.28-.232 1.563-1.359 2.551-3.359 2.551-5.595 0-2.235-.987-4.236-2.551-5.595-.09-.08-.184-.156-.28-.231z"],"americanexpress":["American Express","2E77BC","M16.015 14.378c0-.32-.135-.496-.344-.622-.21-.12-.464-.135-.81-.135h-1.543v2.82h.675v-1.027h.72c.24 0 .39.024.478.125.12.13.104.38.104.55v.35h.66v-.555c-.002-.25-.017-.376-.108-.516-.06-.08-.18-.18-.33-.234l.02-.008c.18-.072.48-.297.48-.747zm-.87.407l-.028-.002c-.09.053-.195.058-.33.058h-.81v-.63h.824c.12 0 .24 0 .33.05.098.048.156.147.15.255 0 .12-.045.215-.134.27zM20.297 15.837H19v.6h1.304c.676 0 1.05-.278 1.05-.884 0-.28-.066-.448-.187-.582-.153-.133-.392-.193-.73-.207l-.376-.015c-.104 0-.18 0-.255-.03-.09-.03-.15-.105-.15-.21 0-.09.017-.166.09-.21.083-.046.177-.066.272-.06h1.23v-.602h-1.35c-.704 0-.958.437-.958.84 0 .9.776.855 1.407.87.104 0 .18.015.225.06.046.03.082.106.082.18 0 .077-.035.15-.08.18-.06.053-.15.07-.277.07zM0 0v10.096L.81 8.22h1.75l.225.464V8.22h2.043l.45 1.02.437-1.013h6.502c.295 0 .56.057.756.236v-.23h1.787v.23c.307-.17.686-.23 1.12-.23h2.606l.24.466v-.466h1.918l.254.465v-.466h1.858v3.948H20.87l-.36-.6v.585h-2.353l-.256-.63h-.583l-.27.614h-1.213c-.48 0-.84-.104-1.08-.24v.24h-2.89v-.884c0-.12-.03-.12-.105-.135h-.105v1.036H6.067v-.48l-.21.48H4.69l-.202-.48v.465H2.235l-.256-.624H1.4l-.256.624H0V24h23.786v-7.108c-.27.135-.613.18-.973.18H21.09v-.255c-.21.165-.57.255-.914.255H14.71v-.9c0-.12-.018-.12-.12-.12h-.075v1.022h-1.8v-1.066c-.298.136-.643.15-.928.136h-.214v.915h-2.18l-.54-.617-.57.6H4.742v-3.93h3.61l.518.602.554-.6h2.412c.28 0 .74.03.942.225v-.24h2.177c.202 0 .644.045.903.225v-.24h3.265v.24c.163-.164.508-.24.803-.24h1.89v.24c.194-.15.464-.24.84-.24h1.176V0H0zM21.156 14.955c.004.005.006.012.01.016.01.01.024.01.032.02l-.042-.035zM23.828 13.082h.065v.555h-.065zM23.865 15.03v-.005c-.03-.025-.046-.048-.075-.07-.15-.153-.39-.215-.764-.225l-.36-.012c-.12 0-.194-.007-.27-.03-.09-.03-.15-.105-.15-.21 0-.09.03-.16.09-.204.076-.045.15-.05.27-.05h1.223v-.588h-1.283c-.69 0-.96.437-.96.84 0 .9.78.855 1.41.87.104 0 .18.015.224.06.046.03.076.106.076.18 0 .07-.034.138-.09.18-.045.056-.136.07-.27.07h-1.288v.605h1.287c.42 0 .734-.118.9-.36h.03c.09-.134.135-.3.135-.523 0-.24-.045-.39-.135-.526zM18.597 14.208v-.583h-2.235V16.458h2.235v-.585h-1.57v-.57h1.533v-.584h-1.532v-.51M13.51 8.787h.685V11.6h-.684zM13.126 9.543l-.007.006c0-.314-.13-.5-.34-.624-.217-.125-.47-.135-.81-.135H10.43v2.82h.674v-1.034h.72c.24 0 .39.03.487.12.122.136.107.378.107.548v.354h.677v-.553c0-.25-.016-.375-.11-.516-.09-.107-.202-.19-.33-.237.172-.07.472-.3.472-.75zm-.855.396h-.015c-.09.054-.195.056-.33.056H11.1v-.623h.825c.12 0 .24.004.33.05.09.04.15.128.15.25s-.047.22-.134.266zM15.92 9.373h.632v-.6h-.644c-.464 0-.804.105-1.02.33-.286.3-.362.69-.362 1.11 0 .512.123.833.36 1.074.232.238.645.31.97.31h.78l.255-.627h1.39l.262.627h1.36v-2.11l1.272 2.11h.95l.002.002V8.786h-.684v1.963l-1.18-1.96h-1.02V11.4L18.11 8.744h-1.004l-.943 2.22h-.3c-.177 0-.362-.03-.468-.134-.125-.15-.186-.36-.186-.662 0-.285.08-.51.194-.63.133-.135.272-.165.516-.165zm1.668-.108l.464 1.118v.002h-.93l.466-1.12zM2.38 10.97l.254.628H4V9.393l.972 2.205h.584l.973-2.202.015 2.202h.69v-2.81H6.118l-.807 1.904-.876-1.905H3.343v2.663L2.205 8.787h-.997L.01 11.597h.72l.26-.626h1.39zm-.688-1.705l.46 1.118-.003.002h-.915l.457-1.12zM11.856 13.62H9.714l-.85.923-.825-.922H5.346v2.82H8l.855-.932.824.93h1.302v-.94h.838c.6 0 1.17-.164 1.17-.945l-.006-.003c0-.78-.598-.93-1.128-.93zM7.67 15.853l-.014-.002H6.02v-.557h1.47v-.574H6.02v-.51H7.7l.733.82-.764.824zm2.642.33l-1.03-1.147 1.03-1.108v2.253zm1.553-1.258h-.885v-.717h.885c.24 0 .42.098.42.344 0 .243-.15.372-.42.372zM9.967 9.373v-.586H7.73V11.6h2.237v-.58H8.4v-.564h1.527V9.88H8.4v-.507"],"applepay":["Apple Pay","000000","M2.15 4.318a42.16 42.16 0 0 0-.454.003c-.15.005-.303.013-.452.04a1.44 1.44 0 0 0-1.06.772c-.07.138-.114.278-.14.43-.028.148-.037.3-.04.45A10.2 10.2 0 0 0 0 6.222v11.557c0 .07.002.138.003.207.004.15.013.303.04.452.027.15.072.291.142.429a1.436 1.436 0 0 0 .63.63c.138.07.278.115.43.142.148.027.3.036.45.04l.208.003h20.194l.207-.003c.15-.004.303-.013.452-.04.15-.027.291-.071.428-.141a1.432 1.432 0 0 0 .631-.631c.07-.138.115-.278.141-.43.027-.148.036-.3.04-.45.002-.07.003-.138.003-.208l.001-.246V6.221c0-.07-.002-.138-.004-.207a2.995 2.995 0 0 0-.04-.452 1.446 1.446 0 0 0-1.2-1.201 3.022 3.022 0 0 0-.452-.04 10.448 10.448 0 0 0-.453-.003zm0 .512h19.942c.066 0 .131.002.197.003.115.004.25.01.375.032.109.02.2.05.287.094a.927.927 0 0 1 .407.407.997.997 0 0 1 .094.288c.022.123.028.258.031.374.002.065.003.13.003.197v11.552c0 .065 0 .13-.003.196-.003.115-.009.25-.032.375a.927.927 0 0 1-.5.693 1.002 1.002 0 0 1-.286.094 2.598 2.598 0 0 1-.373.032l-.2.003H1.906c-.066 0-.133-.002-.196-.003a2.61 2.61 0 0 1-.375-.032c-.109-.02-.2-.05-.288-.094a.918.918 0 0 1-.406-.407 1.006 1.006 0 0 1-.094-.288 2.531 2.531 0 0 1-.032-.373 9.588 9.588 0 0 1-.002-.197V6.224c0-.065 0-.131.002-.197.004-.114.01-.248.032-.375.02-.108.05-.199.094-.287a.925.925 0 0 1 .407-.406 1.03 1.03 0 0 1 .287-.094c.125-.022.26-.029.375-.032.065-.002.131-.002.196-.003zm4.71 3.7c-.3.016-.668.199-.88.456-.191.22-.36.58-.316.918.338.03.675-.169.888-.418.205-.258.345-.603.308-.955zm2.207.42v5.493h.852v-1.877h1.18c1.078 0 1.835-.739 1.835-1.812 0-1.07-.742-1.805-1.808-1.805zm.852.719h.982c.739 0 1.161.396 1.161 1.089 0 .692-.422 1.092-1.164 1.092h-.979zm-3.154.3c-.45.01-.83.28-1.05.28-.235 0-.593-.264-.981-.257a1.446 1.446 0 0 0-1.23.747c-.527.908-.139 2.255.374 2.995.249.366.549.769.944.754.373-.014.52-.242.973-.242.454 0 .586.242.98.235.41-.007.667-.366.915-.733.286-.417.403-.82.41-.841-.007-.008-.79-.308-.797-1.209-.008-.754.615-1.113.644-1.135-.352-.52-.9-.578-1.09-.593a1.123 1.123 0 0 0-.092-.002zm8.204.397c-.99 0-1.606.533-1.652 1.256h.777c.072-.358.369-.586.845-.586.502 0 .803.266.803.711v.309l-1.097.064c-.951.054-1.488.484-1.488 1.184 0 .72.548 1.207 1.332 1.207.526 0 1.032-.281 1.264-.727h.019v.659h.788v-2.76c0-.803-.62-1.317-1.591-1.317zm1.94.072l1.446 4.009c0 .003-.073.24-.073.247-.125.41-.33.571-.711.571-.069 0-.206 0-.267-.015v.666c.06.011.267.019.335.019.83 0 1.226-.312 1.568-1.283l1.5-4.214h-.868l-1.012 3.259h-.015l-1.013-3.26zm-1.167 2.189v.316c0 .521-.45.917-1.024.917-.442 0-.731-.228-.731-.579 0-.342.278-.56.769-.593z"],"googlepay":["Google Pay","5F6368","M3.963 7.235A3.963 3.963 0 00.422 9.419a3.963 3.963 0 000 3.559 3.963 3.963 0 003.541 2.184c1.07 0 1.97-.352 2.627-.957.748-.69 1.18-1.71 1.18-2.916a4.722 4.722 0 00-.07-.806H3.964v1.526h2.14a1.835 1.835 0 01-.79 1.205c-.356.241-.814.379-1.35.379-1.034 0-1.911-.697-2.225-1.636a2.375 2.375 0 010-1.517c.314-.94 1.191-1.636 2.225-1.636a2.152 2.152 0 011.52.594l1.132-1.13a3.808 3.808 0 00-2.652-1.033zm6.501.55v6.9h.886V11.89h1.465c.603 0 1.11-.196 1.522-.588a1.911 1.911 0 00.635-1.464 1.92 1.92 0 00-.635-1.456 2.125 2.125 0 00-1.522-.598zm2.427.85a1.156 1.156 0 01.823.365 1.176 1.176 0 010 1.686 1.171 1.171 0 01-.877.357H11.35V8.635h1.487a1.156 1.156 0 01.054 0zm4.124 1.175c-.842 0-1.477.308-1.907.925l.781.491c.288-.417.68-.626 1.175-.626a1.255 1.255 0 01.856.323 1.009 1.009 0 01.366.785v.202c-.34-.193-.774-.289-1.3-.289-.617 0-1.11.145-1.479.434-.37.288-.554.677-.554 1.165a1.476 1.476 0 00.525 1.156c.35.308.785.463 1.305.463.61 0 1.098-.27 1.465-.81h.038v.655h.848v-2.909c0-.61-.19-1.09-.568-1.44-.38-.35-.896-.525-1.551-.525zm2.263.154l1.946 4.422-1.098 2.38h.915L24 9.963h-.965l-1.368 3.391h-.02l-1.406-3.39zm-2.146 2.368c.494 0 .88.11 1.156.33 0 .372-.147.696-.44.973a1.413 1.413 0 01-.997.414 1.081 1.081 0 01-.69-.232.708.708 0 01-.293-.578c0-.257.12-.47.363-.647.24-.173.54-.26.9-.26Z"],"stripe":["Stripe","635BFF","M13.976 9.15c-2.172-.806-3.356-1.426-3.356-2.409 0-.831.683-1.305 1.901-1.305 2.227 0 4.515.858 6.09 1.631l.89-5.494C18.252.975 15.697 0 12.165 0 9.667 0 7.589.654 6.104 1.872 4.56 3.147 3.757 4.992 3.757 7.218c0 4.039 2.467 5.76 6.476 7.219 2.585.92 3.445 1.574 3.445 2.583 0 .98-.84 1.545-2.354 1.545-1.875 0-4.965-.921-6.99-2.109l-.9 5.555C5.175 22.99 8.385 24 11.714 24c2.641 0 4.843-.624 6.328-1.813 1.664-1.305 2.525-3.236 2.525-5.732 0-4.128-2.524-5.851-6.594-7.305h.003z"]};
 // A payment logo, in the card scheme's own colour.
@@ -414,7 +419,9 @@ async function turnOnPush() {
 
 function shell(content) {
 	const tabs = [["overview", "Overview", "pulse"], ["add", "Add", "plus"], ["alerts", "Alerts", "bell"], ["pages", "Status pages", "page"], ["account", "Account", "user"]];
-	if (state.me.role === "owner") tabs.push(["admin", "Admin", "cog"]);
+	// Viewers on a team can look but not add (team.ts).
+	if (state.me.member && state.me.member.role === "viewer") tabs.splice(1, 1);
+	if (state.me.role === "owner" && !state.me.member) tabs.push(["admin", "Admin", "cog"]);
 	app.replaceChildren(
 		h("div", { class: "top" }, h("div", { class: "in" }, logo(), h("nav", null, tabs.map(([id, label, ic]) => h("button", { class: tab === id ? "on" : "", onclick: () => go(id) }, icon(ic), label))))),
 		h("main", null, flashText ? msg("ok", flashText) : null, content, h("p", { class: "foot" }, brand().name + " " + window.SW.version)),
@@ -481,10 +488,30 @@ function overview() {
 			h("span", { class: "big" }, icon(down ? "alert" : probs ? "alert" : "check", 30)),
 			h("div", null, h("h1", null, down ? down + " down right now" : probs ? "Something needs a look" : "Everything's working"),
 				h("p", null, down ? "We keep checking and will tell you the moment it's back." : (last ? "Last checked " + ago(last) + "." : "Your first checks are on their way.")))),
-		h("p", { class: "lead" }, "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row."),
+		h("p", { class: "lead" }, state.regions && state.regions.length ? "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row, confirmed from another region (" + state.regions.join(", ") + ")." : "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row."),
 		h("div", { class: "stats" }, h("div", { class: "stat" }, h("b", { class: "t-up" }, count((x) => x.status === "up")), h("span", null, "Working")), h("div", { class: "stat" }, h("b", { class: "t-down" }, down), h("span", null, "Down")), h("div", { class: "stat" }, h("b", { class: "t-unsure" }, probs), h("span", null, "Need a look")), h("div", { class: "stat" }, h("b", null, m.length), h("span", null, "Watching"))),
 		lic && lic.websites > lic.limit ? h("div", { class: "note" }, "You're watching " + lic.websites + " websites. The free licence covers one person or organisation's own websites, up to " + lic.limit + ". For more, ", h("a", { href: "https://paulobrien.dev/contact/", target: "_blank", rel: "noopener" }, "ask about a commercial licence"), ".") : null,
 		m.map(monitorCard));
+}
+
+// One click to tell visitors on every status page that shows this monitor (and their subscribers).
+function postOutageButton(x) {
+	const pgs = state.pages.filter((p) => p.monitors.includes(x.id));
+	if (!pgs.length || (state.me.member && state.me.member.role === "viewer")) return null;
+	const already = state.notices.some((n) => !n.resolved_at && pgs.some((p) => p.id === n.page_id) && n.title.startsWith(x.label));
+	if (already) return null;
+	return btn("Post to status page", "page", (e) => { if (confirm("Post a notice that " + x.label + " is down on " + pgs.map((p) => p.title).join(" and ") + "?")) act(e.currentTarget, async () => { let r; for (const p of pgs) r = await api("/api/pages/" + p.id + "/notices", { title: x.label + " is down", body: "We know about it and we're working on it. We'll update this page when it's fixed.", impact: "major" }); return r; }, "Posted"); }, "small");
+}
+
+// Uptime for any dates in the last 90 days, as a spreadsheet (CSV) of each day.
+function uptimeDownload(x) {
+	const today = new Date().toISOString().slice(0, 10);
+	const from = h("input", { type: "date", value: new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10), max: today });
+	const to = h("input", { type: "date", value: today, max: today });
+	return h("details", { style: "margin-top:12px" }, h("summary", { style: "cursor:pointer;font-weight:700" }, "Uptime for any dates"),
+		h("div", { class: "two" }, field("From", from), field("To", to)),
+		h("p", { class: "hint" }, "A spreadsheet of each day's checks and uptime, from the last 90 days."),
+		h("div", { class: "btns" }, btn("Download", "down", () => { location.href = "/api/monitors/" + x.id + "/uptime.csv?from=" + from.value + "&to=" + to.value; }, "small")));
 }
 
 function monitorCard(x) {
@@ -496,7 +523,7 @@ function monitorCard(x) {
 	else facts.push(h("span", null, "Checked ", h("b", null, ago(x.checkedAt)), " · every " + everyWords(x.fast ? 0.5 : x.every)));
 	if (x.cert) facts.push(h("span", { class: x.cert.daysLeft <= 7 ? "t-down" : x.cert.daysLeft <= 21 && !x.cert.auto ? "t-unsure" : "" }, "Certificate ", h("b", null, x.cert.daysLeft + " days"), x.cert.auto ? " (renews itself)" : ""));
 	if (x.reg && x.reg.expires) facts.push(h("span", { class: x.reg.daysLeft <= 7 ? "t-down" : x.reg.daysLeft <= 30 ? "t-unsure" : "" }, "Domain renewal ", h("b", null, x.reg.daysLeft + " days")));
-	const sub = x.kind === "website" ? x.url : x.kind === "heartbeat" ? "Checks in every " + everyWords(x.every) : x.host + " port " + x.port;
+	const sub = x.kind === "website" || x.kind === "api" ? x.url : x.kind === "dns" ? x.host + " " + ((x.rules && x.rules.type) || "A") + " records" : x.kind === "heartbeat" ? "Checks in every " + everyWords(x.every) : x.host + " port " + x.port;
 	return h("div", { class: "card" },
 		h("div", { class: "mon" },
 			h("span", { class: "dot s-" + x.status, title: WORDS[x.status] }),
@@ -504,17 +531,29 @@ function monitorCard(x) {
 				h("div", { class: "title" }, x.label, h("span", { class: "kind" }, KIND[x.kind])),
 				x.name || x.kind !== "website" ? h("div", { class: "sub" }, sub) : null,
 				h("div", { class: "why t-" + x.status }, WORDS[x.status], x.why && x.status !== "up" ? ": " + x.why : "", x.since ? " (since " + when(x.since) + ")" : "", x.pausedUntil ? " until " + when(x.pausedUntil) : ""),
+				x.regional ? h("div", { class: "hint" }, "Only failing from our main check. Our checks from " + x.regional.join(" and ") + " can reach it, so we haven't sent an alert. We'll ask them again every 10 minutes.") : null,
 				h("div", { class: "facts" }, facts)),
 			h("div", { class: "acts" }, btn(isOpen ? "Less" : "More", "chev", () => { isOpen ? open.delete(x.id) : open.add(x.id); draw(); }, "small"))),
 		bars(x.bars),
 		isOpen ? h("div", { class: "more" },
 			x.pingUrl ? h("div", null, h("h3", null, "Check-in address"), h("p", { class: "hint" }, "Have your job visit this address each time it finishes, for example: curl -fsS " + x.pingUrl), copyBox(x.pingUrl)) : null,
 			x.responses.length > 1 ? h("div", null, h("h3", { style: "margin-top:12px" }, "Response time, last 24 hours"), spark(x.responses)) : null,
+			x.speeds && x.speeds.length ? h("div", null, h("h3", { style: "margin-top:12px" }, "Speed from around the world, last 24 hours"),
+				h("table", null, h("tr", null, h("th", null, "From"), h("th", null, "Average"), h("th", null, "Slowest hour")),
+					x.responses.length ? h("tr", null, h("td", null, "Our main check"), h("td", null, Math.round(x.responses.reduce((n, r) => n + r.ms, 0) / x.responses.length) + " ms"), h("td", null, Math.max(...x.responses.map((r) => r.ms)) + " ms")) : null,
+					x.speeds.map((r) => h("tr", null, h("td", null, r.region.charAt(0).toUpperCase() + r.region.slice(1)), h("td", null, r.avg + " ms"), h("td", null, r.worst + " ms")))),
+				h("p", { class: "hint" }, "Checked every 5 minutes from each region, so you can see how fast it is for visitors far away.")) : null,
+			x.lastFail ? h("details", { style: "margin-top:12px" }, h("summary", { style: "cursor:pointer;font-weight:700" }, "What we saw when it last failed (" + when(x.lastFail.at) + ")"),
+				h("p", null, x.lastFail.status ? "Status " + x.lastFail.status + (x.lastFail.why ? ": " + x.lastFail.why : "") : x.lastFail.why || ""),
+				Object.keys(x.lastFail.headers).length ? h("table", null, Object.entries(x.lastFail.headers).map(([k, v]) => h("tr", null, h("th", null, k), h("td", { style: "word-break:break-all" }, v)))) : null,
+				x.lastFail.body ? h("pre", { style: "white-space:pre-wrap;word-break:break-word;max-height:240px;overflow:auto;background:var(--bg,#f8fafc);border:1px solid #e2e8f0;border-radius:10px;padding:10px;font-size:13px" }, x.lastFail.body) : null) : null,
+			uptimeDownload(x),
 			h("h3", { style: "margin-top:12px" }, "Recent outages"),
 			x.outages.length ? h("ul", null, x.outages.map((o) => h("li", null, when(o.from) + " to " + when(o.to) + ": " + o.why))) : h("p", { class: "hint" }, "None recorded."),
 			x.reg && x.reg.registrar ? h("p", { class: "hint" }, x.reg.domain + " is registered with " + x.reg.registrar + (x.reg.expires ? " until " + new Date(x.reg.expires).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }) : "") + ".") : null,
 			editing === x.id ? editForm(x) : null,
 			h("div", { class: "btns" },
+				x.status === "down" ? postOutageButton(x) : null,
 				x.kind !== "heartbeat" ? btn("Check now", "refresh", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/check", {}), "Checked")) : null,
 				x.pausedUntil ? btn("Resume", "play", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/resume", {}))) : btn("Pause for an hour", "pause", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/pause", { minutes: 60 }))),
 				!x.pausedUntil ? btn("Pause for a day", "pause", (e) => act(e.currentTarget, () => api("/api/monitors/" + x.id + "/pause", { minutes: 1440 }))) : null,
@@ -540,16 +579,54 @@ const rulesOf = (f) => ({ status: f.status.value, contains: f.contains.value, mi
 const rulesBlock = (f) => h("details", null, h("summary", { style: "font-weight:700;cursor:pointer;margin-top:12px" }, "Extra rules (optional)"),
 	h("div", { class: "two" }, field("Must contain", f.contains, "Words that are always on the page, such as your footer."), field("Must not contain", f.missing, "Such as Database error."), field("Status code", f.status, "Such as 200."), field("Slower than this counts as down (seconds)", f.maxMs)));
 
+// API checks: the method, headers (one "Name: value" a line), body and a JSON value to expect, on top of the usual rules.
+function apiFields(r) {
+	r = r || {};
+	const headersText = Object.entries(r.headers || {}).map(([k, v]) => k + ": " + v).join("\n");
+	const f = {
+		method: h("select", null, state.choices.apiMethods.map((m) => h("option", { value: m, selected: m === (r.method || "GET") }, m))),
+		headers: h("textarea", { rows: 3, placeholder: "Authorization: Bearer your-token" }, headersText),
+		body: h("textarea", { rows: 3, placeholder: '{"ping": true}' }, r.body || ""),
+		path: h("input", { placeholder: "status", value: r.json ? r.json.path : "" }),
+		equals: h("input", { placeholder: "ok", value: r.json ? r.json.equals : "" }),
+		rules: rulesFields(r),
+	};
+	f.headersStart = headersText;
+	return f;
+}
+function apiRulesOf(f) {
+	const out = { ...rulesOf(f.rules), method: f.method.value, body: f.body.value };
+	// Headers come back masked: only send them when they've been changed.
+	if (f.headers.value !== f.headersStart) out.headers = Object.fromEntries(f.headers.value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const at = l.indexOf(":"); return at > 0 ? [l.slice(0, at).trim(), l.slice(at + 1).trim()] : [l, ""]; }));
+	if (f.path.value.trim()) out.json = { path: f.path.value.trim(), equals: f.equals.value };
+	return out;
+}
+const apiBlock = (f) => [field("Method", f.method),
+	h("details", null, h("summary", { style: "font-weight:700;cursor:pointer;margin-top:12px" }, "Headers, body and expected answer (optional)"),
+		field("Headers", f.headers, "One a line, such as Authorization: Bearer your-token. Saved values are hidden after saving."),
+		field("Body", f.body, "Sent with POST, PUT and PATCH."),
+		h("div", { class: "two" }, field("JSON value", f.path, "Its path, such as status or data.ok."), field("Must equal", f.equals, "Such as ok or true.")),
+		h("div", { class: "two" }, field("Must contain", f.rules.contains), field("Must not contain", f.rules.missing), field("Status code", f.rules.status, "Without one, anything under 400 counts as working."), field("Slower than this counts as down (seconds)", f.rules.maxMs)))];
+
+function dnsFields(r) {
+	r = r || {};
+	return { type: h("select", null, state.choices.dnsTypes.map((t) => h("option", { value: t, selected: t === (r.type || "A") }, t))), expect: h("input", { placeholder: "Optional, such as 192.0.2.10 or mx.example.com", value: r.expect || "" }) };
+}
+const dnsRulesOf = (f) => ({ type: f.type.value, expect: f.expect.value });
+const dnsBlock = (f) => h("div", { class: "two" }, field("Record type", f.type), field("Must include", f.expect, "Alerts if the answer stops including this. Leave empty to alert only when the records vanish."));
+
 function editForm(x) {
 	const name = h("input", { value: x.name || "" });
 	const every = everySelect(x.kind, x.fast ? 0.5 : x.every);
 	const rf = x.kind === "website" ? rulesFields(x.rules) : null;
+	const af = x.kind === "api" ? apiFields(x.rules) : null;
+	const df = x.kind === "dns" ? dnsFields(x.rules) : null;
 	const extras = h("input", { type: "checkbox", checked: x.extras });
 	const card = h("div", { class: "note" },
 		field("Name", name), field(x.kind === "heartbeat" ? "How often it runs" : "How often to check", every),
-		rf ? rulesBlock(rf) : null,
+		rf ? rulesBlock(rf) : null, af ? apiBlock(af) : null, df ? dnsBlock(df) : null,
 		x.kind === "website" ? h("label", { class: "check" }, extras, "Watch the certificate and the domain's renewal date") : null,
-		h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/monitors/" + x.id, { name: name.value, every: Number(every.value), ...(rf ? { rules: rulesOf(rf), extras: extras.checked } : {}) }); editing = null; return r; }, "Saved"), "main")));
+		h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/monitors/" + x.id, { name: name.value, every: Number(every.value), ...(rf ? { rules: rulesOf(rf), extras: extras.checked } : af ? { rules: apiRulesOf(af) } : df ? { rules: dnsRulesOf(df) } : {}) }); editing = null; return r; }, "Saved"), "main")));
 	return card;
 }
 
@@ -564,27 +641,35 @@ let addKind = "website";
 function add() {
 	const lim = state.limits;
 	const tiles = [["website", "Website", "globe", "A web page answers, has the right words and loads in time. Plus its certificate and domain renewal."],
+		["api", "API", "code", "An API answers your request, with your own method, headers and body, and returns the JSON you expect."],
+		["dns", "DNS", "list", "A domain's DNS records are still there, and still point where they should."],
 		["mail", "Mail server", "mail", "Your mail server answers and offers encryption, for sending (587, 465) or reading (993, 143, 995, 110)."],
 		["port", "Port", "plug", "Any other server and port answers, such as a database or SSH."],
 		["heartbeat", "Heartbeat", "heart", "A backup or scheduled job checks in when it runs. Tells you when it doesn't."]];
 	const name = h("input", { placeholder: addKind === "heartbeat" ? "Nightly backup" : "Optional" });
 	const url = h("input", { placeholder: "https://example.com/", inputmode: "url" });
-	const host = h("input", { placeholder: addKind === "mail" ? "mail.example.com" : "server.example.com" });
+	const host = h("input", { placeholder: addKind === "mail" ? "mail.example.com" : addKind === "dns" ? "example.com" : "server.example.com" });
 	const port = addKind === "mail" ? h("select", null, state.choices.mailPorts.map((p) => h("option", { value: p.port }, p.port + ": " + p.name))) : h("input", { inputmode: "numeric", placeholder: "22" });
 	const every = everySelect(addKind, addKind === "heartbeat" ? 1440 : Math.max(5, state.choices.every[0]));
 	const rf = rulesFields();
+	const af = addKind === "api" ? apiFields() : null;
+	const df = addKind === "dns" ? dnsFields() : null;
 	const extras = h("input", { type: "checkbox", checked: true });
 	const used = state.monitors.length;
 	const form = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(form.querySelector("button[type=submit]"), async () => {
 		const body = { kind: addKind, name: name.value, every: Number(every.value) };
 		if (addKind === "website") Object.assign(body, { url: url.value, rules: rulesOf(rf), extras: extras.checked });
 		if (addKind === "mail" || addKind === "port") Object.assign(body, { host: host.value, port: Number(port.value) });
+		if (addKind === "api") Object.assign(body, { url: url.value, rules: apiRulesOf(af) });
+		if (addKind === "dns") Object.assign(body, { host: host.value, rules: dnsRulesOf(df) });
 		const r = await api("/api/monitors", body);
 		open.add(r.added); tab = "overview"; location.hash = "overview";
 		return r;
 	}, "Added. It's been checked once already."); } },
 		addKind === "website" ? [field("Web address", url, "The home page, or any page such as a login or shop page."), field("Name", name), field("How often to check", every), rulesBlock(rf), h("label", { class: "check" }, extras, "Watch the certificate and the domain's renewal date")] : null,
 		addKind === "mail" || addKind === "port" ? [field("Server name", host), field("Port", port, addKind === "mail" ? "Port 25 can't be checked from Cloudflare, which doesn't allow it." : "Any port except 25."), field("Name", name), field("How often to check", every)] : null,
+		addKind === "api" ? [field("API address", url, "Such as https://api.example.com/health."), field("Name", name), field("How often to check", every), ...apiBlock(af)] : null,
+		addKind === "dns" ? [field("Domain or name", host, "Such as example.com or mail.example.com."), dnsBlock(df), field("Name", name), field("How often to check", every)] : null,
 		addKind === "heartbeat" ? [field("Name", name, "So you know which job it is."), field("How often the job runs", every), h("p", { class: "hint" }, "Once it's added you'll get an address for the job to visit each time it runs.")] : null,
 		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("plus"), "Start watching")));
 	return h("div", null, h("h1", null, "Add something to watch"),
@@ -658,6 +743,59 @@ function alerts() {
 		h("div", { class: "card" }, h("h2", null, "Recent alerts"), state.alerts.length ? state.alerts.map((a) => h("details", { class: "alert-item" }, h("summary", { style: "cursor:pointer" }, h("b", { class: a.urgent ? "t-down" : "" }, a.subject), h("span", { class: "hint" }, " · " + when(a.at) + " · " + (a.sent === "held" ? "held (daily limit)" : a.sent || "nowhere to send it"))), h("pre", null, a.text))) : h("p", { class: "hint" }, "None yet.")));
 }
 
+// Status page subscribers: loaded when the list is opened, kept until the page changes tab.
+const subLists = {};
+const fmt = (n) => Number(n).toLocaleString("en-GB");
+function subsBlock(pg) {
+	const s = state.subs || {};
+	if (s.subscribers === 0) return h("div", null, h("h3", { style: "margin-top:16px" }, "Subscribers"), h("p", { class: "hint" }, "Your plan doesn't include status page subscribers. Pro and Business plans let people get updates by email, chat room or feed."));
+	const take = h("input", { type: "checkbox", checked: pg.subscribe !== 0 });
+	const auto = h("input", { type: "checkbox", checked: pg.auto_notify !== 0 });
+	const save = (e) => act(e.currentTarget, () => savePage(pg, { subscribe: take.checked, autoNotify: auto.checked }), "Saved");
+	const used = s.emails === null ? fmt(s.used || 0) + " emails sent this month" : fmt(s.used || 0) + " of " + fmt(s.emails) + " emails used this month";
+	const list = subLists[pg.id];
+	const paste = h("textarea", { placeholder: "One email address a line, or pasted from a spreadsheet" });
+	const load = () => api("/api/pages/" + pg.id + "/subscribers").then((r) => { subLists[pg.id] = r.subscribers; draw(); }).catch(() => { subLists[pg.id] = []; draw(); });
+	return h("div", null, h("h3", { style: "margin-top:16px" }, "Subscribers"),
+		h("p", { class: "hint" }, fmt(pg.subscribers || 0) + " confirmed" + (s.subscribers === null ? "" : " (your plan includes " + fmt(s.subscribers) + " email subscribers across your pages)") + ". " + used + "."),
+		h("label", { class: "check" }, take, "Let visitors subscribe to updates"),
+		h("label", { class: "check" }, auto, "Tell subscribers automatically when something on this page goes down and comes back"),
+		h("div", { class: "btns" }, btn("Save", "save", save, "small")),
+		h("details", { ontoggle: (e) => { if (e.currentTarget.open && !subLists[pg.id]) load(); }, open: !!list },
+			h("summary", { style: "cursor:pointer;font-weight:700" }, "See and add subscribers"),
+			list ? (list.length ? h("table", null, h("tbody", null, list.map((x) => h("tr", null,
+				h("td", null, x.target, x.confirmed_at ? null : h("span", { class: "kind" }, "waiting to confirm"), x.monitors ? h("span", { class: "kind" }, x.monitors.length + " chosen") : null),
+				h("td", null, when(x.created_at)),
+				h("td", null, btn("Remove", "trash", (e) => act(e.currentTarget, async () => { const r = await api("/api/subscribers/" + x.id, undefined, "DELETE"); subLists[pg.id] = list.filter((y) => y.id !== x.id); return r; }, "Removed"), "small danger")))))) : h("p", { class: "hint" }, "Nobody has subscribed yet.")) : h("p", { class: "hint" }, "Loading..."),
+			field("Add email addresses", paste, "People you add here are subscribed straight away, so only add people who asked for updates."),
+			h("div", { class: "btns" }, btn("Add subscribers", "plus", (e) => act(e.currentTarget, async () => { const r = await api("/api/pages/" + pg.id + "/subscribers", { emails: paste.value }); delete subLists[pg.id]; load(); return r; }, "Added")))));
+}
+
+// Saves one setting on a status page, sending what the page already has for everything else.
+const savePage = (pg, more) => api("/api/pages", Object.assign({ id: pg.id, title: pg.title, slug: pg.slug, intro: pg.intro || "", host: pg.host || "", monitors: pg.monitors }, more));
+
+function extrasBlock(pg) {
+	const x = state.extras || {};
+	const pw = h("input", { type: "password", autocomplete: "new-password", placeholder: pg.locked ? "A new password" : "At least 8 characters" });
+	const lockPart = x.lock || pg.locked ? h("div", null, h("h3", { style: "margin-top:16px" }, "Password"),
+		h("p", { class: "hint" }, pg.locked ? "This page is private. Visitors need the password, and it has no badge or widget." : "Make this page private, for your staff or a client only. Visitors type the password once a month."),
+		x.lock ? field(pg.locked ? "Change the password" : "Page password", pw) : null,
+		h("div", { class: "btns" }, x.lock ? btn(pg.locked ? "Change password" : "Set password", "lock", (e) => act(e.currentTarget, () => savePage(pg, { password: pw.value }), "Password saved"), "small") : null,
+			pg.locked ? btn("Remove password", "trash", (e) => act(e.currentTarget, () => savePage(pg, { removePassword: true }), "The page is public again"), "small danger") : null)) : null;
+	const mailPart = x.emailUpdates ? h("div", null, h("h3", { style: "margin-top:16px" }, "Post notices by email"),
+		pg.updateEmail ? [copyBox(pg.updateEmail),
+			h("p", { class: "hint" }, "Send an email from " + state.me.email + " to this address and it's posted as a notice, and sent to subscribers. Start the subject with \"Maintenance:\" or \"Major:\" to set the type, or \"Resolved\" to close the latest notice. Keep the address private."),
+			h("div", { class: "btns" }, btn("New address", "refresh", (e) => act(e.currentTarget, () => savePage(pg, { mailUpdates: true }), "New address made"), "small"), btn("Turn off", "trash", (e) => act(e.currentTarget, () => savePage(pg, { mailUpdates: false }), "Turned off"), "small danger"))]
+			: [h("p", { class: "hint" }, "Get a private email address for this page. Anything you send there from your own email is posted as a notice, which is handy from your phone."),
+			h("div", { class: "btns" }, btn("Turn on", "mail", (e) => act(e.currentTarget, () => savePage(pg, { mailUpdates: true }), "Turned on"), "small"))]) : null;
+	const badgeHtml = '<a href="' + (pg.host ? "https://" + pg.host + "/" : pg.address) + '"><img src="' + pg.badge + '" alt="Status"></a>';
+	const widgetHtml = '<iframe src="' + pg.widget + '" title="Status" style="border:0;width:300px;height:64px"></iframe>';
+	const badgePart = !pg.locked ? h("details", { style: "margin-top:16px" }, h("summary", { style: "cursor:pointer;font-weight:700" }, "Badge and widget for your website"),
+		h("p", { class: "hint" }, "Paste one of these into your own website to show whether everything's working. They update by themselves."),
+		h("p", null, h("img", { src: pg.badge, alt: "Status badge" })), field("Badge", copyBox(badgeHtml)), field("Widget", copyBox(widgetHtml))) : null;
+	return [lockPart, mailPart, badgePart];
+}
+
 function pages() {
 	const ed = editing && editing.page !== undefined ? editing : null;
 	const p = ed && ed.page ? state.pages.find((x) => x.id === ed.page) : null;
@@ -678,26 +816,66 @@ function pages() {
 		state.pages.map((pg) => {
 			const ntitle = h("input", { placeholder: "Email is slow this morning" });
 			const nbody = h("textarea", { placeholder: "What's happening, and when you expect it fixed" });
-			const nimpact = h("select", null, h("option", { value: "minor" }, "Minor problem"), h("option", { value: "major" }, "Major problem"), h("option", { value: "maintenance" }, "Maintenance"));
+			const nstart = h("input", { type: "datetime-local" });
+			const nend = h("input", { type: "datetime-local" });
+			const nwindow = h("div", { class: "two", style: "display:none" }, field("Starts (optional)", nstart), field("Ends", nend, "Alerts for this page's monitors wait until it ends, and it resolves itself."));
+			const nimpact = h("select", { onchange: (e) => { nwindow.style.display = e.target.value === "maintenance" ? "" : "none"; } }, h("option", { value: "minor" }, "Minor problem"), h("option", { value: "major" }, "Major problem"), h("option", { value: "maintenance" }, "Planned maintenance"));
+			const iso = (v) => (v ? new Date(v).toISOString() : "");
+			const tell = h("input", { type: "checkbox", checked: (pg.subscribers || 0) > 0 });
 			const notes = state.notices.filter((n) => n.page_id === pg.id);
 			return h("div", { class: "card" }, h("h2", null, pg.title), copyBox(pg.host ? "https://" + pg.host + "/" : pg.address),
 				h("div", { class: "btns" }, h("a", { class: "btn", href: pg.address, target: "_blank", rel: "noopener" }, icon("open"), "Open"), btn("Edit", "edit", () => { editing = { page: pg.id }; draw(); window.scrollTo(0, 0); }), btn("Delete", "trash", (e) => { if (confirm("Delete this status page?")) act(e.currentTarget, () => api("/api/pages/" + pg.id, undefined, "DELETE")); }, "danger")),
 				h("h3", { style: "margin-top:16px" }, "Notices"),
-				notes.length ? notes.map((n) => h("div", { class: "note" }, h("b", null, n.title), " · " + n.impact + " · " + when(n.created_at) + (n.resolved_at ? " · resolved " + when(n.resolved_at) : ""), n.body ? h("div", null, n.body) : null,
+				notes.length ? notes.map((n) => h("div", { class: "note" }, h("b", null, n.title), " · " + n.impact + " · " + (n.ends_at ? when(n.starts_at) + " to " + when(n.ends_at) : when(n.created_at)) + (n.resolved_at ? " · resolved " + when(n.resolved_at) : ""), n.body ? h("div", null, n.body) : null,
 					h("div", { class: "btns" }, !n.resolved_at ? btn("Mark resolved", "check", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id + "/resolve", {})), "small") : null, btn("Delete", "trash", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id, undefined, "DELETE")), "small danger")))) : h("p", { class: "hint" }, "None in the last 14 days."),
-				h("details", null, h("summary", { style: "cursor:pointer;font-weight:700" }, "Post a notice"), field("Title", ntitle), field("Details", nbody), field("Type", nimpact),
-					h("div", { class: "btns" }, btn("Post notice", "send", (e) => act(e.currentTarget, () => api("/api/pages/" + pg.id + "/notices", { title: ntitle.value, body: nbody.value, impact: nimpact.value }), "Posted")))));
+				h("details", null, h("summary", { style: "cursor:pointer;font-weight:700" }, "Post a notice"), field("Title", ntitle), field("Details", nbody), field("Type", nimpact), nwindow,
+					(pg.subscribers || 0) > 0 ? h("label", { class: "check" }, tell, "Email and post this to the page's " + fmt(pg.subscribers) + " subscribers") : null,
+					h("div", { class: "btns" }, btn("Post notice", "send", (e) => act(e.currentTarget, () => api("/api/pages/" + pg.id + "/notices", { title: ntitle.value, body: nbody.value, impact: nimpact.value, tell: tell.checked, startsAt: nimpact.value === "maintenance" && nend.value ? iso(nstart.value) || new Date().toISOString() : "", endsAt: nimpact.value === "maintenance" ? iso(nend.value) : "" }), "Posted")))),
+				subsBlock(pg), extrasBlock(pg));
 		}));
+}
+
+// The team (team.ts): logins for colleagues, and people who only get alerts. For the account's own login.
+const ROLE_WORDS = { admin: "Admin", viewer: "Viewer", alerts: "Alerts only" };
+function teamCard() {
+	const t = state.team;
+	if (!t) return null;
+	const loginsUsed = 1 + t.members.filter((m) => m.role !== "alerts").length;
+	const alertsUsed = t.members.filter((m) => m.role === "alerts").length;
+	const canLogins = t.seats === null || t.seats > 1 || !!t.extraPrice;
+	const canAlerts = t.alertPeople === null || t.alertPeople > 0;
+	if (!canLogins && !canAlerts && !t.members.length) return null;
+	const email = h("input", { type: "email", placeholder: "sam@example.com" });
+	const name = h("input", { placeholder: "Sam" });
+	const role = h("select", null, canLogins ? h("option", { value: "viewer" }, "Viewer: can look but not change anything") : null, canLogins ? h("option", { value: "admin" }, "Admin: can add and change things, but not billing or the team") : null, canAlerts ? h("option", { value: "alerts" }, "Alerts only: no login, just the alert emails") : null);
+	const room = (t.seats === null ? "" : "Logins: " + loginsUsed + " of " + t.seats + " included, counting yours" + (t.extraPrice ? ". Extra logins are added to your subscription" : "") + ". ") + (t.alertPeople === null ? "" : "Alerts only: " + alertsUsed + " of " + t.alertPeople + ".");
+	return h("div", { class: "card" }, h("h2", null, icon("users"), " Your team"),
+		h("p", null, "Give colleagues their own login, or send alerts to more people. Everyone signs in with their own email and password."),
+		room ? h("p", { class: "hint" }, room) : null,
+		t.members.length ? h("table", null, h("tr", null, h("th", null, "Who"), h("th", null, "Role"), h("th", null, "")),
+			t.members.map((m) => {
+				const r = m.role === "alerts" ? null : h("select", { style: "min-width:110px", onchange: (e) => act(e.target, () => api("/api/team/" + m.id, { role: e.target.value }), "Role changed") }, ["admin", "viewer"].map((x) => h("option", { value: x, selected: x === m.role }, ROLE_WORDS[x])));
+				return h("tr", null, h("td", null, h("b", null, m.name || m.email), m.name ? h("div", { class: "hint" }, m.email) : null, m.accepted ? null : h("span", { class: "kind" }, "invited")),
+					h("td", null, r || ROLE_WORDS[m.role]), h("td", null, btn("Remove", "trash", (e) => { if (confirm("Remove " + (m.name || m.email) + " from your team?")) act(e.currentTarget, () => api("/api/team/" + m.id, undefined, "DELETE"), "Removed"); }, "small danger")));
+			})) : null,
+		canLogins || canAlerts ? h("details", null, h("summary", { style: "cursor:pointer;font-weight:700" }, "Add someone"),
+			h("div", { class: "two" }, field("Email address", email), field("Name (optional)", name)), field("What they can do", role),
+			h("div", { class: "btns" }, btn("Send invitation", "send", (e) => act(e.currentTarget, () => api("/api/team", { email: email.value, name: name.value, role: role.value }), "Invitation sent"), "main"))) : null);
 }
 
 function account() {
 	const me = state.me;
+	if (me.member) return memberAccount(me);
 	const name = h("input", { value: me.name || "" });
+	const reports = h("input", { type: "checkbox", checked: me.reports !== false });
 	const cur = h("input", { type: "password", autocomplete: "current-password" });
 	const next = h("input", { type: "password", autocomplete: "new-password" });
 	return h("div", null, h("h1", null, "Account"), h("p", { class: "lead" }, "Signed in as " + me.email + "."),
 		me.role === "client" ? planCard(me) : null,
-		h("div", { class: "card" }, h("h2", null, "Your details"), field("Name", name), h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/settings", { name: name.value }), "Saved"), "main"))),
+		teamCard(),
+		h("div", { class: "card" }, h("h2", null, "Your details"), field("Name", name),
+			state.extras && state.extras.reports ? h("label", { class: "check" }, reports, "Email me an uptime report on the first of each month") : null,
+			h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/settings", { name: name.value, reports: reports.checked }), "Saved"), "main"))),
 		h("div", { class: "card" }, h("h2", null, "Change your password"), field("Current password", cur), field("New password", next, "At least 10 characters."),
 			h("div", { class: "btns" }, btn("Change password", "key", (e) => act(e.currentTarget, async () => { await api("/api/password", { current: cur.value, next: next.value }); return api("/api/state"); }, "Password changed. Other devices are signed out.")))),
 		appsCard(),
@@ -706,6 +884,22 @@ function account() {
 			h("div", { class: "btns" }, h("a", { class: "btn", href: "/api/export" }, icon("down"), "Download my data"))),
 		h("div", { class: "btns" }, btn("Sign out", "out", async () => { await api("/api/signout", {}); location.href = "/signin"; }), btn("Sign out everywhere", "out", async () => { await api("/api/signout-all", {}); location.href = "/signin"; })),
 		state.apps && state.apps.canDelete ? deleteCard() : null);
+}
+
+// A team member's own Account tab: their name, alerts, password and signing out.
+function memberAccount(me) {
+	const m = me.member;
+	const name = h("input", { value: m.name || "" });
+	const alerts = h("input", { type: "checkbox", checked: !!m.alerts });
+	const cur = h("input", { type: "password", autocomplete: "current-password" });
+	const next = h("input", { type: "password", autocomplete: "new-password" });
+	return h("div", null, h("h1", null, "Account"), h("p", { class: "lead" }, "Signed in as " + m.email + ", " + (m.role === "admin" ? "an admin" : "a viewer") + " on " + (me.name || me.email) + "'s account."),
+		h("div", { class: "card" }, h("h2", null, "Your details"), field("Name", name),
+			h("label", { class: "check" }, alerts, "Email me the alerts too"),
+			h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, () => api("/api/settings", { name: name.value, alerts: alerts.checked }), "Saved"), "main"))),
+		h("div", { class: "card" }, h("h2", null, "Change your password"), field("Current password", cur), field("New password", next, "At least 10 characters."),
+			h("div", { class: "btns" }, btn("Change password", "key", (e) => act(e.currentTarget, async () => { await api("/api/password", { current: cur.value, next: next.value }); return api("/api/state"); }, "Password changed"), "main"))),
+		h("div", { class: "btns" }, btn("Sign out", "out", async () => { await api("/api/signout", {}); location.href = "/signin"; }), btn("Sign out everywhere", "out", async () => { await api("/api/signout-all", {}); location.href = "/signin"; })));
 }
 
 // Apps on phones and computers: a QR code to sign one in, and the ones signed in now.
@@ -794,6 +988,15 @@ function admin() {
 		free: h("input", { type: "checkbox", checked: pl ? pl.free : false }), stripePriceYear: h("input", { value: pl ? pl.stripePriceYear || "" : "", placeholder: "price_... (optional)" }), priceYear: h("input", { value: pl ? pl.priceYear || "" : "", placeholder: "£50 a year" }),
 		alertsPerDay: h("input", { inputmode: "numeric", value: pl && pl.alertsPerDay ? pl.alertsPerDay : "", placeholder: "No limit" }),
 		phoneAlerts: h("input", { inputmode: "numeric", value: pl && pl.phoneAlerts ? pl.phoneAlerts : "", placeholder: "None" }),
+		subscribers: h("input", { inputmode: "numeric", value: pl && pl.subscribers ? pl.subscribers : "", placeholder: "None" }),
+		subEmails: h("input", { inputmode: "numeric", value: pl && pl.subEmails ? pl.subEmails : "", placeholder: "None" }),
+		subHooks: h("input", { inputmode: "numeric", value: pl && pl.subHooks ? pl.subHooks : "", placeholder: "None" }),
+		locked: h("input", { type: "checkbox", checked: !!(pl && pl.locked) }),
+		speeds: h("input", { inputmode: "numeric", value: pl && pl.speeds ? pl.speeds : "", placeholder: "None" }),
+		seats: h("input", { inputmode: "numeric", value: pl && pl.seats ? pl.seats : "", placeholder: "Just theirs" }),
+		seatPrice: h("input", { value: pl && pl.seatPrice ? pl.seatPrice : "", placeholder: "price_..." }),
+		seatPriceYear: h("input", { value: pl && pl.seatPriceYear ? pl.seatPriceYear : "", placeholder: "price_..." }),
+		alertPeople: h("input", { inputmode: "numeric", value: pl && pl.alertPeople ? pl.alertPeople : "", placeholder: "None" }),
 		fast: h("input", { inputmode: "numeric", value: pl && pl.fast ? pl.fast : "", placeholder: "None" }),
 		channels: h("select", null, [["all", "Every channel"], ["push", "Email and browser alerts"], ["email", "Email only"]].map(([v, l]) => h("option", { value: v, selected: (pl ? pl.channels : "all") === v }, l))) };
 	const cap = h("input", { inputmode: "numeric", value: a.signupCap });
@@ -818,12 +1021,13 @@ function admin() {
 		h("div", { class: "card" }, h("h2", null, "Plans"), h("p", { class: "hint" }, "Make a product with a monthly or yearly price in Stripe, then paste its price ID here. The price text is what the sign-up page shows."),
 			a.plans.length ? h("table", null, h("tr", null, h("th", null, "Plan"), h("th", null, "Includes"), h("th", null, "")), a.plans.map((x) => h("tr", null,
 				h("td", null, h("b", null, x.name), h("div", { class: "hint" }, (x.price || "No price text") + (x.on ? "" : " · switched off") + (x.free ? " · free" : x.stripePrice ? "" : " · no Stripe price yet"))),
-				h("td", null, x.monitors + " things, every " + everyWords(x.minEvery) + ", " + x.pages + " status page" + (x.pages === 1 ? "" : "s")),
+				h("td", null, x.monitors + " monitors, every " + everyWords(x.minEvery) + ", " + x.pages + " status page" + (x.pages === 1 ? "" : "s")),
 				h("td", null, h("div", { class: "btns", style: "margin:0" }, btn("Edit", "edit", () => { editing = { plan: x.id }; draw(); }, "small"), btn("Delete", "trash", (e) => act(e.currentTarget, () => api("/api/admin/plans/" + x.id, undefined, "DELETE")), "small danger")))))) : h("p", { class: "hint" }, "No plans yet."),
-			pe ? h("div", { class: "note" }, h("h3", null, pl ? "Edit " + pl.name : "New plan"), h("div", { class: "two" }, field("Name", pf.name), field("Price text", pf.priceLabel), field("Stripe price ID", pf.stripePrice), field("Yearly price text", pf.priceYear), field("Yearly Stripe price ID", pf.stripePriceYear), field("Things to watch", pf.monitors), field("Fastest checks", pf.minEvery), field("Status pages", pf.pages), field("Alerts can go to", pf.channels), field("Most alerts a day", pf.alertsPerDay), field("Text and WhatsApp alerts a month", pf.phoneAlerts), field("Checked every 30 seconds", pf.fast), field("Order on the page", pf.position), field("Short description", pf.blurb)),
+			pe ? h("div", { class: "note" }, h("h3", null, pl ? "Edit " + pl.name : "New plan"), h("div", { class: "two" }, field("Name", pf.name), field("Price text", pf.priceLabel), field("Stripe price ID", pf.stripePrice), field("Yearly price text", pf.priceYear), field("Yearly Stripe price ID", pf.stripePriceYear), field("Monitors", pf.monitors), field("Fastest checks", pf.minEvery), field("Status pages", pf.pages), field("Alerts can go to", pf.channels), field("Most alerts a day", pf.alertsPerDay), field("Text and WhatsApp alerts a month", pf.phoneAlerts), field("Checked every 30 seconds", pf.fast), field("Status page email subscribers", pf.subscribers), field("Emails to subscribers a month", pf.subEmails), field("Chat rooms and webhooks following pages", pf.subHooks), field("Speed from 3 regions for", pf.speeds), field("Logins included, counting theirs", pf.seats), field("Stripe price ID for each extra login (monthly)", pf.seatPrice), field("Stripe price ID for each extra login (yearly)", pf.seatPriceYear), field("People who only get alerts", pf.alertPeople), field("Order on the page", pf.position), field("Short description", pf.blurb)),
 				h("label", { class: "check" }, pf.free, "Free plan: no Stripe price, people confirm their email address instead"),
+				h("label", { class: "check" }, pf.locked, "Status pages can have a password"),
 				h("label", { class: "check" }, pf.on, "Offer this plan on the sign-up page"),
-				h("div", { class: "btns" }, btn("Save plan", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/admin/plans", { id: pl ? pl.id : undefined, name: pf.name.value, priceLabel: pf.priceLabel.value, stripePrice: pf.stripePrice.value, stripePriceYear: pf.stripePriceYear.value, priceLabelYear: pf.priceYear.value, free: pf.free.checked, alertsPerDay: pf.alertsPerDay.value, phoneAlerts: pf.phoneAlerts.value, fast: pf.fast.value, channels: pf.channels.value, monitors: Number(pf.monitors.value), minEvery: Number(pf.minEvery.value), pages: Number(pf.pages.value), position: Number(pf.position.value), blurb: pf.blurb.value, on: pf.on.checked }); editing = null; return r; }, "Plan saved"), "main"), btn("Cancel", "x", () => { editing = null; draw(); })))
+				h("div", { class: "btns" }, btn("Save plan", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/admin/plans", { id: pl ? pl.id : undefined, name: pf.name.value, priceLabel: pf.priceLabel.value, stripePrice: pf.stripePrice.value, stripePriceYear: pf.stripePriceYear.value, priceLabelYear: pf.priceYear.value, free: pf.free.checked, alertsPerDay: pf.alertsPerDay.value, phoneAlerts: pf.phoneAlerts.value, fast: pf.fast.value, subscribers: pf.subscribers.value, subEmails: pf.subEmails.value, subHooks: pf.subHooks.value, locked: pf.locked.checked, speeds: pf.speeds.value, seats: pf.seats.value, seatPrice: pf.seatPrice.value, seatPriceYear: pf.seatPriceYear.value, alertPeople: pf.alertPeople.value, channels: pf.channels.value, monitors: Number(pf.monitors.value), minEvery: Number(pf.minEvery.value), pages: Number(pf.pages.value), position: Number(pf.position.value), blurb: pf.blurb.value, on: pf.on.checked }); editing = null; return r; }, "Plan saved"), "main"), btn("Cancel", "x", () => { editing = null; draw(); })))
 				: h("div", { class: "btns" }, btn("New plan", "plus", () => { editing = { plan: null }; draw(); }))),
 		adminPhones(a.phones),
 		h("div", { class: "card" }, h("h2", null, "Clients"), a.clients.length ? h("table", null, h("tr", null, h("th", null, "Client"), h("th", null, "Plan"), h("th", null, "")), a.clients.map((c) => h("tr", null,

@@ -3,6 +3,7 @@
 // and a daily cap stops a server that keeps going up and down from flooding anyone.
 
 import { EmailMessage } from "cloudflare:email";
+import { alertPeople } from "./team.ts";
 import { CHANNEL_KINDS, hookMonitor, labelOf, webhookHeaders, MAX_FAILS, payloadFor, rawEmail, iso, type Alert, type ChannelKind, type HookEvent } from "./core.ts";
 import { accountById, getMeta, install, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { brandedHtml, toneOf, type EmailLook } from "./email.ts";
@@ -91,6 +92,15 @@ export async function deliver(env: Env, account: AccountRow, alert: Alert, monit
 			const problem = await sendEmail(env, inst.alertFrom, account.alert_to, alert.subject, alert.text, inst.brand.name,
 				{ brand: inst.brand, tone: toneOf(alert), footer: `You get these alerts because of your ${inst.brand.name} account. Choose where they go on the Alerts page.` });
 			sent.push(problem ? "email failed" : "email");
+		}
+		// Team members who asked for alerts, and people who only get alerts (team.ts).
+		if (inst.alertFrom) {
+			for (const to of await alertPeople(db, account.id)) {
+				if (to === account.alert_to) continue;
+				const problem = await sendEmail(env, inst.alertFrom, to, alert.subject, alert.text, inst.brand.name,
+					{ brand: inst.brand, tone: toneOf(alert), footer: `You get these alerts because you're on a ${inst.brand.name} team. Ask whoever added you to remove you.` });
+				if (problem) sent.push("team email failed");
+			}
 		}
 		const { results } = await db.prepare("SELECT * FROM channels WHERE account_id = ? AND on_off = 1").bind(account.id).all<ChannelRow>();
 		const row = monitorId ? await db.prepare("SELECT * FROM monitors WHERE id = ?").bind(monitorId).first<MonitorRow>() : null;

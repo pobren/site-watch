@@ -56,7 +56,7 @@ export async function livePlans(db: D1Database, paid = true): Promise<PlanRow[]>
 
 export const publicPlan = (p: PlanRow) => ({
 	id: p.id, name: p.name, blurb: p.blurb, price: p.price_label, priceYear: p.stripe_price_year ? p.price_label_year : null, free: p.free === 1,
-	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all", phoneAlerts: p.phone_alerts ?? 0, fast: p.fast ?? 0,
+	monitors: p.monitors, minEvery: p.min_every, pages: p.pages, alertsPerDay: p.alerts_per_day, channels: p.channels ?? "all", phoneAlerts: p.phone_alerts ?? 0, fast: p.fast ?? 0, subscribers: p.subscribers ?? 0, subEmails: p.sub_emails ?? 0, subHooks: p.sub_hooks ?? 0, locked: p.locked === 1, speeds: p.speeds ?? 0, seats: p.seats ?? 0, seatPrice: p.seat_price ?? null, seatPriceYear: p.seat_price_year ?? null, alertPeople: p.alert_people ?? 0,
 });
 
 /** The free plan clients drop back to when a paid subscription ends, if there is one. */
@@ -132,7 +132,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 		if (problem) return json({ error: problem }, 400);
 		const plan = (await livePlans(db, !!env.STRIPE_SECRET_KEY)).find((p) => p.id === b.plan);
 		if (!plan) return json({ error: "Please choose a plan." }, 400);
-		if (await db.prepare("SELECT 1 FROM accounts WHERE email = ?").bind(email).first()) return json({ error: "There's already an account for that email address. Please sign in instead." }, 409);
+		if (await db.prepare("SELECT 1 FROM accounts WHERE email = ?1 UNION SELECT 1 FROM members WHERE email = ?1 AND role != 'alerts'").bind(email).first()) return json({ error: "There's already an account for that email address. Please sign in instead." }, 409);
 		// A cap on new accounts a day, so a script can't fill the database, and a smaller one for each address.
 		const dayAgo = iso(new Date(Date.now() - 86_400_000));
 		const today = await db.prepare("SELECT COUNT(*) AS n FROM accounts WHERE created_at > ?").bind(dayAgo).first<{ n: number }>();
@@ -272,8 +272,13 @@ const ENDED = ["canceled", "incomplete_expired", "unpaid"];
 async function saveSub(env: Env, account: string, sub: Sub): Promise<void> {
 	const db = env.DB;
 	const before = await db.prepare("SELECT status, plan FROM accounts WHERE id = ?").bind(account).first<{ status: string; plan: string | null }>();
-	const price = sub.items?.data?.[0]?.price?.id;
-	const plan = price ? await db.prepare("SELECT id FROM plans WHERE stripe_price = ? OR stripe_price_year = ?").bind(price, price).first<{ id: string }>() : null;
+	// The plan is whichever item is a plan's price: extra team logins (team.ts) are a second item on the same subscription.
+	let plan: { id: string } | null = null;
+	for (const it of sub.items?.data ?? []) {
+		const price = it.price?.id;
+		plan = price ? await db.prepare("SELECT id FROM plans WHERE stripe_price = ? OR stripe_price_year = ?").bind(price, price).first<{ id: string }>() : null;
+		if (plan) break;
+	}
 	// With a free plan on offer, a client whose subscription ends drops back to it rather than being held.
 	const free = ENDED.includes(sub.status) ? await freePlan(db) : null;
 	if (free) {

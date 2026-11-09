@@ -3,12 +3,17 @@
 // minute). Once a day each
 // website's certificate and domain renewal date are looked up too, with reminders before either runs out.
 
+import { monthlyReports } from "./extras.ts";
+import { endMaintenance, inMaintenance } from "./maintenance.ts";
 import { deliver } from "./alerts.ts";
-import { checkMail, checkPort, checkWebsite, lookupCert, lookupRegistration, type Result } from "./checks.ts";
+import { checkJob, lookupCert, lookupRegistration, type Result } from "./checks.ts";
 import {
-	alertFor, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, stateOf, step,
+	addSpeed, alertFor, askAgain, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, speedLogOf, stateOf, step, weighOpinions,
 	type Cert, type Registration,
 } from "./core.ts";
+import { secondOpinions, speedsFrom } from "./probe.ts";
+import { runSends, tellAboutMonitor } from "./subscribers.ts";
+import { publicName } from "./status.ts";
 import { accountById, ensureSchema, install, LIVE_SQL, type AccountRow, type CheckBatch, type Env, type MonitorRow } from "./db.ts";
 
 /** Checks per run, and how many at once (Workers allow six open connections; the free plan 50 requests a run). */
@@ -29,6 +34,9 @@ const HEARTBEAT_LOOK = 5;
 const HALF_MINUTE = 30;
 /** Alerts kept in the list. */
 const KEEP_ALERTS = 500;
+/** Speed from each region: most timed per run (every 5 minutes), and how many the owner's own install times. */
+const SPEEDS_PER_RUN = 500;
+const OWNER_SPEEDS = 25;
 
 const minutesAgo = (now: Date, mins: number) => iso(new Date(now.getTime() - mins * 60_000 + 20_000));
 
@@ -37,26 +45,38 @@ async function inBatches<T>(items: T[], size: number, fn: (x: T) => Promise<void
 }
 
 export async function look(row: MonitorRow, now: Date, helloName: string): Promise<Result> {
-	if (row.kind === "website") return checkWebsite(row.url!, rulesOf(row.rules));
-	if (row.kind === "mail") return checkMail(row.host!, row.port!, helloName);
-	if (row.kind === "port") return checkPort(row.host!, row.port!);
-	return { outcome: heartbeatOutcome(row.every, row.last_ping, row.created_at, now), ms: null };
+	if (row.kind === "heartbeat") return { outcome: heartbeatOutcome(row.every, row.last_ping, row.created_at, now), ms: null };
+	return checkJob({ kind: row.kind, url: row.url, rules: row.rules, host: row.host, port: row.port, helloName });
 }
 
 /** Checks one monitor, saves what it found and sends any alerts. `late`: a failure isn't counted. */
 export interface Ctx { helloName: string; link: string; app: string }
 
 export async function checkOne(env: Env, row: MonitorRow, account: AccountRow, now: Date, ctx: Ctx, opts: { late?: boolean; quiet?: boolean } = {}): Promise<void> {
-	const { outcome, ms } = await look(row, now, ctx.helloName);
+	const { outcome, ms, detail } = await look(row, now, ctx.helloName);
 	if (opts.late && outcome.state !== "up") {
 		await env.DB.prepare("UPDATE monitors SET checked_at = ? WHERE id = ?").bind(iso(now), row.id).run();
 		return;
 	}
 	const before = stateOf(row.state);
-	const { next, events } = step(before, outcome, now, ms);
+	let { next, events } = step(before, outcome, now, ms);
+	// About to say it's down: other regions try it first (probe.ts). While only we can't reach it, they're asked
+	// again every 10 minutes and the alert waits.
+	if (events.some((e) => e.kind === "down") && env.PROBES && row.kind !== "heartbeat") {
+		if (askAgain(before, now)) ({ next, events } = weighOpinions(next, events, await secondOpinions(env, row, ctx.helloName).catch(() => null), now));
+		else ({ next, events } = { next: { ...next, alerted: false, regional: before.regional }, events: events.filter((e) => e.kind !== "down") });
+	}
+	// What it answered when it failed, for the dashboard's "What we saw" (kept until the next failure).
+	if (detail && outcome.state !== "up") next = { ...next, lastFail: { at: iso(now), why: "why" in outcome ? outcome.why : null, ...detail } };
 	await env.DB.prepare("UPDATE monitors SET state = ?, checked_at = ? WHERE id = ?").bind(JSON.stringify(next), iso(now), row.id).run();
 	if (opts.quiet) return;
-	for (const e of events) await deliver(env, account, alertFor({ ...row }, e, account.tz, ctx.link, ctx.app), row.id, now);
+	// Planned maintenance on a status page showing it (maintenance.ts): nobody is alerted for work they planned.
+	if (events.length && (await inMaintenance(env.DB, row.account_id, row.id, now).catch(() => false))) return;
+	for (const e of events) {
+		await deliver(env, account, alertFor({ ...row }, e, account.tz, ctx.link, ctx.app), row.id, now);
+		// Status pages that tell their subscribers automatically (subscribers.ts).
+		if (e.kind === "down" || e.kind === "up") await tellAboutMonitor(env, row.account_id, row.id, publicName(row), e.kind === "down", e.kind === "down" ? e.since : null).catch((x) => console.error("subscribers", x));
+	}
 }
 
 /** The once-a-day look at a website's certificate and domain registration, with reminders. */
@@ -116,6 +136,12 @@ export async function runQueue(env: Env, messages: readonly Message<CheckBatch>[
 		return accounts.get(id)!;
 	};
 	for (const m of messages) {
+		// A batch of messages to status page subscribers: tried again shortly if Amazon asks us to slow down.
+		if (m.body.sends) {
+			if ((await runSends(env, m.body.sends)) === "slow") m.retry({ delaySeconds: 30 });
+			else m.ack();
+			continue;
+		}
 		const { ids, daily, late, at } = m.body;
 		const now = new Date();
 		// A message that waited too long counts as late: failures from it aren't trusted.
@@ -162,6 +188,8 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 		).bind(minutesAgo(now, 24 * 60)).all<{ id: string }>();
 		if (daily.length) await enqueue(env, daily.map((r) => r.id), { daily: true, at: now.getTime() }, "daily_at");
 		await tidy(db, now);
+		await reports(env, now);
+		await regionSpeeds(env, now).catch((e) => console.error("region speeds", e));
 		return;
 	}
 	await inBatches(due, AT_ONCE, async (row) => {
@@ -178,6 +206,41 @@ export async function runScheduled(env: Env, scheduledTime: number): Promise<voi
 	}
 
 	await tidy(db, now);
+	await reports(env, now);
+	await regionSpeeds(env, now).catch((e) => console.error("region speeds", e));
+}
+
+/** Every 5 minutes: websites and APIs on plans with speed from each region are timed from the other regions too. */
+export async function regionSpeeds(env: Env, now: Date): Promise<number> {
+	if (!env.PROBES || now.getUTCMinutes() % 5 !== 2) return 0;
+	const db = env.DB;
+	const { results } = await db.prepare(
+		`SELECT id, kind, url, rules, host, port, speeds FROM (
+			SELECT m.*, ROW_NUMBER() OVER (PARTITION BY m.account_id ORDER BY m.created_at, m.id) AS n,
+				CASE WHEN a.role = 'owner' THEN ${OWNER_SPEEDS} ELSE COALESCE(p.speeds, 0) END AS allowed
+			FROM monitors m JOIN accounts a ON a.id = m.account_id LEFT JOIN plans p ON p.id = a.plan
+			WHERE m.kind IN ('website', 'api') AND (m.paused_until IS NULL OR m.paused_until <= ?) AND (a.role = 'owner' OR a.status IN ('active', 'trialing'))
+		) WHERE n <= allowed LIMIT ${SPEEDS_PER_RUN}`,
+	).bind(iso(now)).all<Pick<MonitorRow, "id" | "kind" | "url" | "rules" | "host" | "port" | "speeds">>();
+	const ctx = await contextOf(env);
+	for (let i = 0; i < results.length; i += 50) {
+		const group = results.slice(i, i + 50);
+		const timings = await speedsFrom(env, group.map((r) => ({ kind: r.kind, url: r.url, rules: r.rules, host: r.host, port: r.port, helloName: ctx.helloName })));
+		const writes = group.map((r, j) => {
+			let log = speedLogOf(r.speeds ?? null);
+			for (const [hint, list] of Object.entries(timings)) log = addSpeed(log, hint, list[j] ?? null, now);
+			return db.prepare("UPDATE monitors SET speeds = ? WHERE id = ?").bind(JSON.stringify(log), r.id);
+		});
+		if (writes.length) await db.batch(writes);
+	}
+	return results.length;
+}
+
+/** Last month's uptime reports, every 10 minutes in the first three days of the month (extras.ts). */
+async function reports(env: Env, now: Date): Promise<void> {
+	if (now.getUTCMinutes() % 5 === 0) await endMaintenance(env, now).catch((e) => console.error("maintenance", e));
+	if (now.getUTCMinutes() % 10 !== 3) return;
+	await monthlyReports(env, now).catch((e) => console.error("monthly reports", e));
 }
 
 /** Once an hour: old alerts beyond the last 500 an account, and sign-up records older than a day. */
