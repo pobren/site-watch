@@ -1,18 +1,23 @@
 // The JSON the app page uses. Everything here needs someone signed in, apart from set-up, sign-in and sign-up.
 // Each account sees only its own things; the owner also gets the Admin routes (branding, plans, clients).
 
+import { REGIONS } from "./probe.ts";
+import { canLock, updateAddress } from "./extras.ts";
+import { maintenanceWindow, windowWords } from "./maintenance.ts";
+import { handleTeam, memberMay, memberView, teamLimits, teamOf } from "./team.ts";
+import { emailsThisMonth, HOOK_NAMES, subLimits, tellSubscribers } from "./subscribers.ts";
 import { appTo, deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
 import { apnsReady } from "./apns.ts";
 import { deleteAccount, handleApps, listApps } from "./apps.ts";
 import { handleAuth, json } from "./api-auth.ts";
-import { currentAccount } from "./auth.ts";
+import { currentAccount, hashPassword } from "./auth.ts";
 import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
-	CHANNEL_NAMES, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
-	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
+	CHANNEL_NAMES, cleanApiRules, cleanDnsRules, DNS_TYPES, API_METHODS, type ApiRules, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
+	HELPER_REGIONS, isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, speedLogOf, speedSummary, stateOf, uptimeCsv, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
-import { DEFAULT_BRAND, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { DEFAULT_BRAND, hasPro, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { cleanSub, vapidKeys } from "./push.ts";
 import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
@@ -27,17 +32,30 @@ export function pageAddress(env: Env, origin: string, slug: string): string {
 
 const bad = (error: string, status = 400) => json({ error }, status);
 
+/** A monitor's rules as shown: API header values work like passwords, so only their start is shown. */
+function shownRules(r: MonitorRow) {
+	const rules = rulesOf(r.rules) as ApiRules;
+	if (r.kind !== "api" || !rules.headers) return rules;
+	return { ...rules, headers: Object.fromEntries(Object.entries(rules.headers).map(([k, v]) => [k, v.length > 8 ? `${v.slice(0, 4)}…` : "…"])) };
+}
+
 export function shape(r: MonitorRow, origin: string, now = new Date()) {
 	const s = stateOf(r.state);
 	const paused = !!r.paused_until && r.paused_until > iso(now);
 	const cert = r.cert ? JSON.parse(r.cert) : null;
 	const reg = r.reg ? JSON.parse(r.reg) : null;
 	return {
-		id: r.id, kind: r.kind, label: labelOf(r), name: r.name, url: r.url, host: r.host, port: r.port, rules: rulesOf(r.rules),
+		id: r.id, kind: r.kind, label: labelOf(r), name: r.name, url: r.url, host: r.host, port: r.port, rules: shownRules(r),
 		// 30 second checks are stored as every 0.5 but shown as every 1 with fast set, so apps that expect whole minutes carry on.
 		every: r.every < 1 ? 1 : r.every, fast: r.every < 1, extras: r.extras === 1,
 		status: statusOf(s, !!r.checked_at, paused), why: s.blocked ?? s.why ?? s.certProblem, since: isDown(s) ? s.since : null, ms: s.ms,
 		uptime30: uptime(s, now, 30), uptime90: uptime(s, now, 90), bars: dailyBars(s, now).map((b) => b.up), responses: responseTimes(s),
+		// Failing only from our own check: the regions that could still reach it (probe.ts).
+		regional: s.regional && isDown(s) ? s.regional.ok : null,
+		// What it answered the last time it failed (websites and APIs).
+		lastFail: s.lastFail ?? null,
+		// Speed from each region over the last 24 hours, for plans that include it.
+		speeds: r.speeds ? speedSummary(speedLogOf(r.speeds), HELPER_REGIONS, now) : [],
 		outages: s.outages.slice(-10).reverse(), checkedAt: r.checked_at, pausedUntil: paused ? r.paused_until : null,
 		pingUrl: r.kind === "heartbeat" && r.token ? `${origin}/hb/${r.token}` : null, lastPing: r.last_ping,
 		cert: cert ? { ...cert, daysLeft: daysLeft(cert.expires, now) } : null,
@@ -75,33 +93,46 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 	const [mons, chans, pages, notices, alerts, inst, limits] = await Promise.all([
 		db.prepare("SELECT * FROM monitors WHERE account_id = ? ORDER BY created_at, id").bind(me.id).all<MonitorRow>(),
 		db.prepare("SELECT id, kind, name, url, secret, on_off, fails FROM channels WHERE account_id = ? ORDER BY id").bind(me.id).all<{ id: number; kind: string; name: string; url: string; secret: string | null; on_off: number; fails: number }>(),
-		db.prepare("SELECT * FROM pages WHERE account_id = ? ORDER BY created_at").bind(me.id).all<{ id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string }>(),
+		db.prepare("SELECT * FROM pages WHERE account_id = ? ORDER BY created_at").bind(me.id).all<{ id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; password?: string | null; mail_token?: string | null }>(),
 		db.prepare("SELECT n.* FROM notices n JOIN pages p ON p.id = n.page_id WHERE p.account_id = ? AND (n.resolved_at IS NULL OR n.resolved_at > ?) ORDER BY n.created_at DESC").bind(me.id, iso(new Date(Date.now() - 14 * 86_400_000))).all(),
 		db.prepare("SELECT id, at, monitor_id, subject, text, urgent, sent FROM alerts WHERE account_id = ? ORDER BY id DESC LIMIT 50").bind(me.id).all(),
 		install(db),
 		limitsOf(db, me),
 	]);
+	const subCounts = new Map((await db.prepare("SELECT page_id, COUNT(*) AS n FROM subscribers WHERE account_id = ? AND confirmed_at IS NOT NULL GROUP BY page_id").bind(me.id).all<{ page_id: string; n: number }>()).results.map((r) => [r.page_id, r.n]));
 	const out: Record<string, unknown> = {
-		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null },
+		me: { role: me.role, email: me.email, name: me.name, plan: me.plan, status: me.status, live: isLive(me), periodEnd: me.period_end, hasBilling: !!me.stripe_customer, unverified: me.status === "unverified", liveUrl: me.live_token ? `${origin}/live/${me.live_token}` : null, liveAlerts: me.live_alerts === 1, liveExpires: me.live_token ? me.live_expires ?? null : null, reports: me.reports !== 0,
+			// Signed in as a team member: who they are and what they may do (team.ts).
+			member: me.member ? { email: me.member.email, name: me.member.name, role: me.member.role, alerts: me.member.alerts } : null },
+		// The team, for the account's own login: logins and alert-only people, and what the plan includes.
+		team: me.member ? null : { members: (await teamOf(db, me.id)).map(memberView), ...(await teamLimits(db, me)) },
 		plans: me.role === "client" ? (await livePlans(db, !!env.STRIPE_SECRET_KEY)).map(publicPlan) : [],
 		monitors: mons.results.map((r) => shape(r, origin)),
 		// Phones waiting for their code are listed under phones.pending, not here. Only webhooks show their secret.
 		channels: chans.results.filter((c) => !isPhone(c.kind) || phoneSecretOf(c.secret).verified).map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "webhook" ? c.secret : null, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
 		phones: await phonesState(env, me, chans.results, limits),
-		pages: pages.results.map((p) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug) })),
+		// Never the password's hash: only whether there is one, and the address for posting notices by email.
+		pages: pages.results.map(({ password, mail_token, ...p }) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug), subscribers: subCounts.get(p.id as string) ?? 0, locked: !!password, updateEmail: updateAddress(env, { mail_token }), badge: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/badge.svg`, widget: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/widget` })),
+		// Extras on this plan: password protected pages, and whether this install takes notices by email.
+		extras: { lock: await canLock(db, me), emailUpdates: !!env.UPDATE_DOMAIN, reports: await hasPro(db, me) },
+		// Status page subscribers: the plan's limits and this month's emails (subscribers.ts).
+		subs: { ...(await subLimits(db, me)), used: await emailsThisMonth(db, me.id), viaSes: !!env.SES_ACCESS_KEY_ID },
 		pageDomain: env.PAGE_DOMAIN?.toLowerCase() ?? null,
 		domainTarget: env.DOMAIN_TARGET?.toLowerCase() ?? null,
 		notices: notices.results,
 		alerts: alerts.results,
 		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
-		choices: { every: everyChoices(limits).filter((n) => n >= 1), fast: limits.fast, heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS },
+		// Regions that confirm a failure before a "down" alert, when this install has them (probe.ts).
+		regions: env.PROBES ? REGIONS.map((r) => r.name) : [],
+		choices: { every: everyChoices(limits).filter((n) => n >= 1), fast: limits.fast, heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS, dnsTypes: DNS_TYPES, apiMethods: API_METHODS },
 		limits,
 		brand: inst.brand,
 		apiKeys: await listKeys(db, me.id),
 		connector: { address: `${origin}/mcp`, api: `${origin}/api/v1`, linked: await connectorLinked(db, me.id, Date.now()) },
-		apps: { list: await listApps(db, me.id, me.session_ver), alerts: apnsReady(env), canDelete: me.role === "client" },
+		apps: { list: await listApps(db, me.id, me.session_ver), alerts: apnsReady(env), canDelete: me.role === "client" && !me.member },
 	};
-	if (me.role === "owner") {
+	// The Admin tab's data is for the owner's own login, never a team member's (team.ts).
+	if (me.role === "owner" && !me.member) {
 		const [clients, plans] = await Promise.all([
 			db.prepare(`SELECT a.id, a.email, a.name, a.plan, a.status, a.period_end, a.created_at, (SELECT COUNT(*) FROM monitors m WHERE m.account_id = a.id) AS monitors
 				FROM accounts a WHERE a.role = 'client' ORDER BY a.created_at DESC LIMIT 500`).all(),
@@ -147,7 +178,19 @@ function newMonitor(b: Record<string, unknown>, accountId: string, choices: numb
 	};
 	const every = b.fast === true ? FAST_EVERY : Number(b.every);
 	const pick = (n: number) => (choices.includes(n) ? n : Math.max(DEFAULT_EVERY, choices.find((x) => x >= 1) ?? DEFAULT_EVERY));
-	if (kind === "website") {
+	if (kind === "api") {
+		const url = cleanUrl(b.url);
+		if (!url) return { error: "Please enter the API address to call, such as https://api.example.com/health." };
+		const rules = cleanApiRules(b.rules);
+		if ("error" in rules) return rules;
+		Object.assign(row, { url, rules: JSON.stringify(rules), every: pick(every), extras: 0 });
+	} else if (kind === "dns") {
+		const host = cleanHost(b.host);
+		if (!host) return { error: "Please enter the domain or name to look up, such as example.com." };
+		const rules = cleanDnsRules(b.rules);
+		if ("error" in rules) return rules;
+		Object.assign(row, { host, rules: JSON.stringify(rules), every: pick(Math.max(every, 5)), extras: 0 });
+	} else if (kind === "website") {
 		const url = cleanUrl(b.url);
 		if (!url) return { error: "Please enter the web address to watch, such as https://example.com/." };
 		const rules = cleanRules(b.rules);
@@ -187,15 +230,19 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	const db = env.DB;
 	const auth = await handleAuth(request, env, path, url);
 	if (auth) return auth;
+	// Team members (team.ts): viewers only look, and admins can't touch billing, the team or keys.
+	const signedIn = await currentAccount(request, db);
+	const refused = signedIn ? memberMay(signedIn, request.method, path) : null;
+	if (refused) return bad(refused, 403);
 	const apps = await handleApps(request, env, path, url);
 	if (apps) return apps;
-	const me = await currentAccount(request, db);
+	const me = signedIn;
 	const billing = await handleBilling(request, env, path, url, me);
 	if (billing) return billing;
 	if (!me) return bad("Please sign in.", 401);
 
 	const inst = await install(db);
-	if (me.role === "owner" && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
+	if (me.role === "owner" && !me.member && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
 	const method = request.method;
 
 	if (path === "/api/state" && method === "GET") return json(await everything(env, me, url.origin));
@@ -203,10 +250,31 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 		const data = await everything(env, me, url.origin);
 		return json({ exportedAt: iso(new Date()), ...data }, 200, { "content-disposition": `attachment; filename="site-watch-${iso(new Date()).slice(0, 10)}.json"` });
 	}
+	// Uptime for chosen dates as a spreadsheet (the monitor's "Uptime for any dates").
+	const csv = /^\/api\/monitors\/([0-9a-f]{16})\/uptime\.csv$/.exec(path);
+	if (csv && method === "GET") {
+		const row = await db.prepare("SELECT * FROM monitors WHERE id = ? AND account_id = ?").bind(csv[1], me.id).first<MonitorRow>();
+		if (!row) return bad("We couldn't find that.", 404);
+		const day = (v: string | null, d: string) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : d);
+		const today = iso(new Date()).slice(0, 10);
+		let from = day(url.searchParams.get("from"), iso(new Date(Date.now() - 29 * 86_400_000)).slice(0, 10));
+		let to = day(url.searchParams.get("to"), today);
+		if (to > today) to = today;
+		if (from > to) [from, to] = [to, from];
+		const name = labelOf(row);
+		return new Response(uptimeCsv(name, stateOf(row.state), from, to), { headers: { "content-type": "text/csv; charset=utf-8", "content-disposition": `attachment; filename="uptime-${from}-to-${to}.csv"`, "cache-control": "no-store" } });
+	}
 	// Two reads live with the status page actions: the name checker and the own domain wizard's progress.
 	const readable = method === "GET" && (path === "/api/pages/name" || /^\/api\/pages\/[0-9a-f]{12}\/domain$/.test(path));
 	if (method !== "POST" && method !== "DELETE" && !readable) return bad("Not found", 404);
 	const b = method === "POST" ? await body(request) : {};
+
+	// -- The team (team.ts): only the account's own login gets here. --
+	if (path === "/api/team" || path.startsWith("/api/team/")) {
+		const problem = await handleTeam(request, env, me, path, method, b, url.origin);
+		if (problem) return bad(problem.error, problem.status);
+		return json(await everything(env, me, url.origin));
+	}
 
 	// -- API keys and the AI connector (Account tab). Only from the signed-in page, never with a key. --
 	if (path === "/api/keys" && method === "POST") {
@@ -249,7 +317,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		if (limits.monitors !== null) {
 			const n = await db.prepare("SELECT COUNT(*) AS n FROM monitors WHERE account_id = ?").bind(me.id).first<{ n: number }>();
-			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan watches up to ${limits.monitors === 1 ? "1 thing" : `${limits.monitors} things`}. Remove one first, or upgrade on the Account tab.`, 403);
+			if ((n?.n ?? 0) >= limits.monitors) return bad(`Your plan includes ${limits.monitors === 1 ? "1 monitor" : `${limits.monitors} monitors`}. Remove one first, or upgrade on the Account tab.`, 403);
 		}
 		const dup = await db.prepare("SELECT 1 FROM monitors WHERE account_id = ? AND kind = ? AND kind != 'heartbeat' AND COALESCE(url, '') = COALESCE(?, '') AND COALESCE(host, '') = COALESCE(?, '') AND COALESCE(port, 0) = COALESCE(?, 0)")
 			.bind(me.id, row.kind, row.url, row.host, row.port).first();
@@ -301,8 +369,11 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			every = n;
 		}
 		let rules = row.rules;
-		if (row.kind === "website" && "rules" in b) {
-			const r = cleanRules(b.rules);
+		if ((row.kind === "website" || row.kind === "api" || row.kind === "dns") && "rules" in b) {
+			// API headers come back masked, so leaving them out keeps the ones already saved.
+			const given = b.rules && typeof b.rules === "object" ? { ...(b.rules as Record<string, unknown>) } : {};
+			if (row.kind === "api" && !("headers" in given)) given.headers = (rulesOf(row.rules) as ApiRules).headers;
+			const r = row.kind === "api" ? cleanApiRules(given) : row.kind === "dns" ? cleanDnsRules(given) : cleanRules(given);
 			if ("error" in r) return bad(r.error);
 			rules = JSON.stringify(r);
 		}
@@ -403,6 +474,12 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 
 	// -- Your settings --
 	if (path === "/api/settings" && method === "POST") {
+		// A team member's own name, and whether they get the alert emails too. Everything else is the account's.
+		if (me.member) {
+			if ("name" in b) { me.member.name = cleanName(b.name, 80); await db.prepare("UPDATE members SET name = ? WHERE id = ?").bind(me.member.name, me.member.id).run(); }
+			if (typeof b.alerts === "boolean") { me.member.alerts = b.alerts; await db.prepare("UPDATE members SET alerts = ? WHERE id = ?").bind(b.alerts ? 1 : 0, me.member.id).run(); }
+			return reply({ ok: true });
+		}
 		let alertTo = me.alert_to;
 		if ("alertTo" in b) {
 			if (b.alertTo === "" || b.alertTo === null) alertTo = null;
@@ -427,6 +504,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		const name = "name" in b ? cleanName(b.name, 80) : me.name;
 		await db.prepare("UPDATE accounts SET alert_to = ?, tz = ?, alerts_per_day = ?, name = ? WHERE id = ?").bind(alertTo, tz, perDay, name, me.id).run();
+		if (typeof b.reports === "boolean") { await db.prepare("UPDATE accounts SET reports = ? WHERE id = ?").bind(b.reports ? 1 : 0, me.id).run(); me.reports = b.reports ? 1 : 0; }
 		Object.assign(me, { alert_to: alertTo, tz, alerts_per_day: perDay, name });
 		return reply({ ok: true });
 	}
@@ -504,6 +582,18 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if (logo !== undefined) await db.prepare("UPDATE pages SET logo = ? WHERE id = ?").bind(logo, id).run();
 			if (support !== undefined) await db.prepare("UPDATE pages SET support = ? WHERE id = ?").bind(support, id).run();
 			if (colour !== undefined) await db.prepare("UPDATE pages SET colour = ? WHERE id = ?").bind(colour, id).run();
+			// Subscribers: whether the page takes them, and whether things going down and back up are sent automatically.
+			if (typeof b.subscribe === "boolean") await db.prepare("UPDATE pages SET subscribe = ? WHERE id = ?").bind(b.subscribe ? 1 : 0, id).run();
+			if (typeof b.autoNotify === "boolean") await db.prepare("UPDATE pages SET auto_notify = ? WHERE id = ?").bind(b.autoNotify ? 1 : 0, id).run();
+			// A password (plans that allow it), and the private address for posting notices by email.
+			if (typeof b.password === "string" && b.password) {
+				if (!(await canLock(db, me))) return bad("Password protected status pages aren't on your plan. Upgrade on the Account tab to add them.", 403);
+				if (b.password.length < 8 || b.password.length > 200) return bad("Please choose a page password of at least 8 characters.");
+				await db.prepare("UPDATE pages SET password = ? WHERE id = ?").bind(await hashPassword(b.password), id).run();
+			}
+			if (b.removePassword === true) await db.prepare("UPDATE pages SET password = NULL WHERE id = ?").bind(id).run();
+			if (b.mailUpdates === true) await db.prepare("UPDATE pages SET mail_token = ? WHERE id = ?").bind(newId(12), id).run();
+			if (b.mailUpdates === false) await db.prepare("UPDATE pages SET mail_token = NULL WHERE id = ?").bind(id).run();
 		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, support, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, support ?? null, colour ?? null, iso(new Date())).run();
 		return reply({ ok: true });
 	}
@@ -538,13 +628,39 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		return bad("Not found", 404);
 	}
+	// Subscribers: the list for one page, adding addresses by hand or from a spreadsheet, and removing one.
+	const sp = /^\/api\/pages\/([0-9a-f]{12})\/subscribers$/.exec(path);
+	if (sp) {
+		if (!(await db.prepare("SELECT 1 FROM pages WHERE id = ? AND account_id = ?").bind(sp[1], me.id).first())) return bad("We couldn't find that page.", 404);
+		if (method === "POST") {
+			const sl = await subLimits(db, me);
+			const list = [...new Set(String(b.emails ?? "").split(/[\s,;]+/).map((x) => cleanEmail(x)).filter((x): x is string => !!x))].slice(0, 5000);
+			if (!list.length) return bad("Please paste one or more email addresses.");
+			if (sl.subscribers !== null) {
+				const n = (await db.prepare("SELECT COUNT(*) AS n FROM subscribers WHERE account_id = ? AND kind = 'email'").bind(me.id).first<{ n: number }>())?.n ?? 0;
+				if (n + list.length > sl.subscribers) return bad(sl.subscribers ? `Your plan includes ${sl.subscribers.toLocaleString("en-GB")} email subscribers and you have ${n.toLocaleString("en-GB")}.` : "Your plan doesn't include subscribers.", 403);
+			}
+			const now = iso(new Date());
+			const rows = list.map((e) => db.prepare("INSERT INTO subscribers (id, page_id, account_id, kind, target, token, confirmed_at, created_at) VALUES (?, ?, ?, 'email', ?, ?, ?, ?) ON CONFLICT (page_id, kind, target) DO UPDATE SET confirmed_at = COALESCE(confirmed_at, excluded.confirmed_at)").bind(newId(8), sp[1], me.id, e, newId(16), now, now));
+			for (let i = 0; i < rows.length; i += 100) await db.batch(rows.slice(i, i + 100));
+			return reply({ added: list.length });
+		}
+		const { results } = await db.prepare("SELECT id, kind, target, monitors, confirmed_at, created_at FROM subscribers WHERE page_id = ? ORDER BY created_at DESC LIMIT 1000").bind(sp[1]).all<{ id: string; kind: string; target: string; monitors: string | null; confirmed_at: string | null; created_at: string }>();
+		// Chat and webhook addresses work like passwords: only where they go is shown.
+		return json({ subscribers: results.map((r) => ({ ...r, target: r.kind === "email" ? r.target : `${HOOK_NAMES[r.kind] ?? r.kind}: ${maskUrl(r.target)}`, monitors: r.monitors ? JSON.parse(r.monitors) : null })) });
+	}
+	const sd = /^\/api\/subscribers\/([0-9a-f]{16})$/.exec(path);
+	if (sd && method === "DELETE") {
+		await db.prepare("DELETE FROM subscribers WHERE id = ? AND account_id = ?").bind(sd[1], me.id).run();
+		return reply();
+	}
 	const pg = /^\/api\/pages\/([0-9a-f]{12})(\/notices)?$/.exec(path);
 	if (pg) {
 		if (!(await db.prepare("SELECT 1 FROM pages WHERE id = ? AND account_id = ?").bind(pg[1], me.id).first())) return bad("We couldn't find that page.", 404);
 		if (method === "DELETE") {
 			const cfId = await db.prepare("SELECT cf_host_id FROM pages WHERE id = ?").bind(pg[1]).first<string>("cf_host_id");
 			await removeHostname(env, cfId);
-			await db.batch([db.prepare("DELETE FROM notices WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM pages WHERE id = ?").bind(pg[1])]);
+			await db.batch([db.prepare("DELETE FROM notices WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM subscribers WHERE page_id = ?").bind(pg[1]), db.prepare("DELETE FROM pages WHERE id = ?").bind(pg[1])]);
 			return reply();
 		}
 		if (pg[2]) {
@@ -552,7 +668,12 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if (!title) return bad("Please give the notice a short title, such as Email is slow this morning.");
 			const impact = ["minor", "major", "maintenance"].includes(String(b.impact)) ? String(b.impact) : "minor";
 			const text = typeof b.body === "string" ? b.body.trim().slice(0, 2000) : "";
-			await db.prepare("INSERT INTO notices (page_id, title, body, impact, created_at) VALUES (?, ?, ?, ?, ?)").bind(pg[1], title, text, impact, iso(new Date())).run();
+			// Planned maintenance can have a window: alerts for the page's monitors wait, and it ends by itself.
+			const win = impact === "maintenance" ? maintenanceWindow(b.startsAt, b.endsAt, new Date()) : { startsAt: null, endsAt: null };
+			if ("error" in win) return bad(win.error);
+			await db.prepare("INSERT INTO notices (page_id, title, body, impact, created_at, starts_at, ends_at) VALUES (?, ?, ?, ?, ?, ?, ?)").bind(pg[1], title, text, impact, iso(new Date()), win.startsAt, win.endsAt).run();
+			const when = win.startsAt ? `\n\nFrom ${windowWords(win.startsAt, win.endsAt!, me.tz)}.` : "";
+			if (b.tell !== false) await tellSubscribers(env, pg[1], `${impact === "maintenance" ? "Planned maintenance" : impact === "major" ? "Major problem" : "Update"}: ${title}`, (text || title) + when).catch((e) => console.error("subscribers", e));
 			return reply();
 		}
 	}
@@ -561,7 +682,10 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		const n = await db.prepare("SELECT n.id FROM notices n JOIN pages p ON p.id = n.page_id WHERE n.id = ? AND p.account_id = ?").bind(Number(nt[1]), me.id).first();
 		if (!n) return bad("We couldn't find that notice.", 404);
 		if (method === "DELETE") await db.prepare("DELETE FROM notices WHERE id = ?").bind(Number(nt[1])).run();
-		else if (nt[2]) await db.prepare("UPDATE notices SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL").bind(iso(new Date()), Number(nt[1])).run();
+		else if (nt[2]) {
+			const done = await db.prepare("UPDATE notices SET resolved_at = ? WHERE id = ? AND resolved_at IS NULL RETURNING page_id, title").bind(iso(new Date()), Number(nt[1])).first<{ page_id: string; title: string }>();
+			if (done && b.tell !== false) await tellSubscribers(env, done.page_id, `Resolved: ${done.title}`, `This is now resolved: ${done.title}.`).catch((e) => console.error("subscribers", e));
+		}
 		return reply();
 	}
 
@@ -632,7 +756,7 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		const monitors = num(b.monitors, 1, 10_000);
 		const pages = num(b.pages, 0, 100);
 		const minEvery = CHECK_EVERY.includes(Number(b.minEvery)) && Number(b.minEvery) >= 1 ? Number(b.minEvery) : null;
-		if (monitors === null || pages === null || minEvery === null) return bad("Please fill in what the plan includes: things to watch, how often and status pages.");
+		if (monitors === null || pages === null || minEvery === null) return bad("Please fill in what the plan includes: monitors, how often and status pages.");
 		const priceId = (x: unknown) => (typeof x === "string" && x.trim() ? x.trim() : null);
 		const free = b.free === true;
 		const price = free ? null : priceId(b.stripePrice);
@@ -645,11 +769,15 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 		if (phoneAlerts === null) return bad("Please choose between 0 and 10,000 text and WhatsApp alerts a month.");
 		const fast = b.fast === "" || b.fast === undefined || b.fast === null ? 0 : num(b.fast, 0, 10_000);
 		if (fast === null) return bad("Please choose how many things can be checked every 30 seconds, from 0 up.");
+		const opt = (x: unknown, max: number) => (x === "" || x === undefined || x === null ? 0 : num(x, 0, max));
+		const subscribers = opt(b.subscribers, 1_000_000), subEmails = opt(b.subEmails, 10_000_000), subHooks = opt(b.subHooks, 10_000);
+		if (subscribers === null || subEmails === null || subHooks === null) return bad("Please give the subscriber limits as whole numbers, from 0 up.");
 		const fields = [name, cleanName(b.blurb, 200), cleanName(b.priceLabel, 40), price, monitors, minEvery, pages, num(b.position, 0, 100) ?? 0, b.on === false ? 0 : 1,
-			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors)];
+			free ? 1 : 0, perDay, channels, priceYear, priceYear ? cleanName(b.priceLabelYear, 40) : null, free ? 0 : phoneAlerts, free ? 0 : Math.min(fast, monitors), free ? 0 : subscribers, free ? 0 : subEmails, free ? 0 : subHooks, !free && b.locked === true ? 1 : 0, free ? 0 : Math.min(opt(b.speeds, 10_000) ?? 0, monitors),
+			free ? 0 : opt(b.seats, 1000) ?? 0, free ? null : priceId(b.seatPrice), free ? null : priceId(b.seatPriceYear), free ? 0 : opt(b.alertPeople, 1000) ?? 0];
 		const id = typeof b.id === "string" && /^[0-9a-f]{8}$/.test(b.id) ? b.id : null;
-		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ? WHERE id = ?").bind(...fields, id).run();
-		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
+		if (id) await db.prepare("UPDATE plans SET name = ?, blurb = ?, price_label = ?, stripe_price = ?, monitors = ?, min_every = ?, pages = ?, position = ?, on_off = ?, free = ?, alerts_per_day = ?, channels = ?, stripe_price_year = ?, price_label_year = ?, phone_alerts = ?, fast = ?, subscribers = ?, sub_emails = ?, sub_hooks = ?, locked = ?, speeds = ?, seats = ?, seat_price = ?, seat_price_year = ?, alert_people = ? WHERE id = ?").bind(...fields, id).run();
+		else await db.prepare("INSERT INTO plans (name, blurb, price_label, stripe_price, monitors, min_every, pages, position, on_off, free, alerts_per_day, channels, stripe_price_year, price_label_year, phone_alerts, fast, subscribers, sub_emails, sub_hooks, locked, speeds, seats, seat_price, seat_price_year, alert_people, id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(...fields, newId(4)).run();
 		return reply({ ok: true });
 	}
 	const pl = /^\/api\/admin\/plans\/([0-9a-f]{8})$/.exec(path);

@@ -29,7 +29,7 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 		const owner = await db.prepare("SELECT 1 FROM accounts WHERE role = 'owner'").first();
 		const me = await currentAccount(request, db);
 		const inst = await install(db);
-		return json({ signedIn: !!me, role: me?.role ?? null, hasOwner: !!owner, brand: inst.brand, sell: inst.sell, turnstile: turnstileKey(env) });
+		return json({ signedIn: !!me, role: me?.member ? "member" : me?.role ?? null, member: me?.member?.role ?? null, hasOwner: !!owner, brand: inst.brand, sell: inst.sell, turnstile: turnstileKey(env) });
 	}
 	if (request.method !== "POST") return null;
 
@@ -61,7 +61,9 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 		const email = cleanEmail(b.email);
 		if (!email) return json({ error: "Please enter your email address." }, 400);
 		if (await tooManyTries(db, email)) return json({ error: "Too many wrong passwords. Please wait 15 minutes and try again." }, 429);
-		const a = await db.prepare("SELECT * FROM accounts WHERE email = ?").bind(email).first<AccountRow>();
+		// The account's own login, or a team member's (team.ts).
+		const a = (await db.prepare("SELECT id, password, session_ver FROM accounts WHERE email = ?").bind(email).first<Pick<AccountRow, "id" | "password" | "session_ver">>())
+			?? (await db.prepare("SELECT id, password, session_ver FROM members WHERE email = ? AND role != 'alerts' AND accepted_at IS NOT NULL").bind(email).first<Pick<AccountRow, "id" | "password" | "session_ver">>().catch(() => null));
 		if (!a?.password || typeof b.password !== "string" || !(await checkPassword(b.password, a.password))) {
 			await noteFailure(db, email);
 			return json({ error: "That email address or password isn't right." }, 401);
@@ -78,12 +80,15 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 		if (!(await turnstileOk(env, request, b.ts))) return json({ error: ROBOT_ERROR }, 403);
 		const email = cleanEmail(b.email);
 		const inst = await install(db);
-		const a = email ? await db.prepare("SELECT * FROM accounts WHERE email = ?").bind(email).first<AccountRow>() : null;
-		if (a && inst.alertFrom) {
+		const a = email ? await db.prepare("SELECT id, email FROM accounts WHERE email = ?").bind(email).first<Pick<AccountRow, "id" | "email">>() : null;
+		const m = !a && email ? await db.prepare("SELECT id, email FROM members WHERE email = ? AND role != 'alerts' AND accepted_at IS NOT NULL").bind(email).first<Pick<AccountRow, "id" | "email">>().catch(() => null) : null;
+		const who = a ?? m;
+		if (who && inst.alertFrom) {
 			const token = newId(24);
-			await db.prepare("UPDATE accounts SET reset_token = ?, reset_until = ? WHERE id = ?").bind(token, iso(new Date(Date.now() + 3_600_000)), a.id).run();
-			await sendEmail(env, inst.alertFrom, a.email, `Choose a new password for ${inst.brand.name}`,
-				`Someone asked to choose a new password for ${a.email}. If it was you, use this link in the next hour.\n\n${url.origin}/reset?token=${token}\n\nIf it wasn't you, there's nothing to do: your password hasn't changed.`, inst.brand.name,
+			if (a) await db.prepare("UPDATE accounts SET reset_token = ?, reset_until = ? WHERE id = ?").bind(token, iso(new Date(Date.now() + 3_600_000)), a.id).run();
+			else await db.prepare("UPDATE members SET token = ?, token_until = ? WHERE id = ?").bind(token, iso(new Date(Date.now() + 3_600_000)), who.id).run();
+			await sendEmail(env, inst.alertFrom, who.email, `Choose a new password for ${inst.brand.name}`,
+				`Someone asked to choose a new password for ${who.email}. If it was you, use this link in the next hour.\n\n${url.origin}/reset?token=${token}\n\nIf it wasn't you, there's nothing to do: your password hasn't changed.`, inst.brand.name,
 				{ brand: inst.brand, button: "Choose a new password", footer: `If the button doesn't work, copy this link into your browser: ${url.origin}/reset?token=${token}` });
 		}
 		return json({ ok: true, owner: !inst.alertFrom });
@@ -93,17 +98,39 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 		const b = await read(request);
 		const token = typeof b.token === "string" && /^[0-9a-f]{48}$/.test(b.token) ? b.token : "";
 		const a = token ? await db.prepare("SELECT * FROM accounts WHERE reset_token = ? AND reset_until > ?").bind(token, iso(new Date())).first<AccountRow>() : null;
-		if (!a) return json({ error: "That link has expired or been used. Please ask for a new one." }, 400);
+		// A team member's invitation or new password link (team.ts).
+		const m = !a && token ? await db.prepare("SELECT id, session_ver FROM members WHERE token = ? AND token_until > ? AND role != 'alerts'").bind(token, iso(new Date())).first<{ id: string; session_ver: number }>().catch(() => null) : null;
+		if (!a && !m) return json({ error: "That link has expired or been used. Please ask for a new one." }, 400);
 		const problem = passwordProblem(b.password);
 		if (problem) return json({ error: problem }, 400);
-		await db.prepare("UPDATE accounts SET password = ?, reset_token = NULL, reset_until = NULL, session_ver = session_ver + 1 WHERE id = ?").bind(await hashPassword(b.password as string), a.id).run();
-		const me = (await db.prepare("SELECT * FROM accounts WHERE id = ?").bind(a.id).first<AccountRow>())!;
+		if (m) {
+			const name = typeof b.name === "string" ? b.name.trim().slice(0, 80) : "";
+			await db.prepare("UPDATE members SET password = ?, token = NULL, token_until = NULL, accepted_at = COALESCE(accepted_at, ?), session_ver = session_ver + 1, name = COALESCE(NULLIF(?, ''), name) WHERE id = ?")
+				.bind(await hashPassword(b.password as string), iso(new Date()), name, m.id).run();
+			return json({ ok: true }, 200, { "set-cookie": await sessionCookie(db, { id: m.id, session_ver: m.session_ver + 1 }, secure) });
+		}
+		await db.prepare("UPDATE accounts SET password = ?, reset_token = NULL, reset_until = NULL, session_ver = session_ver + 1 WHERE id = ?").bind(await hashPassword(b.password as string), a!.id).run();
+		const me = (await db.prepare("SELECT * FROM accounts WHERE id = ?").bind(a!.id).first<AccountRow>())!;
 		return json({ ok: true }, 200, { "set-cookie": await sessionCookie(db, me, secure) });
 	}
 
 	if (path === "/api/signout-all" || path === "/api/password") {
 		const me = await currentAccount(request, db);
 		if (!me) return json({ error: "Please sign in." }, 401);
+		// A team member changes their own password and sessions, never the account's.
+		if (me.member) {
+			const mem = me.member;
+			if (path === "/api/password") {
+				const b = await read(request);
+				if (!mem.password || typeof b.current !== "string" || !(await checkPassword(b.current, mem.password))) return json({ error: "Your current password isn't right." }, 401);
+				const problem = passwordProblem(b.next);
+				if (problem) return json({ error: problem }, 400);
+				await db.prepare("UPDATE members SET password = ? WHERE id = ?").bind(await hashPassword(b.next as string), mem.id).run();
+			}
+			await db.prepare("UPDATE members SET session_ver = session_ver + 1 WHERE id = ?").bind(mem.id).run();
+			if (path === "/api/signout-all") return json({ ok: true }, 200, { "set-cookie": clearCookie(secure) });
+			return json({ ok: true }, 200, { "set-cookie": await sessionCookie(db, { id: mem.id, session_ver: mem.session_ver + 1 }, secure) });
+		}
 		if (path === "/api/password") {
 			const b = await read(request);
 			if (!me.password || typeof b.current !== "string" || !(await checkPassword(b.current, me.password))) return json({ error: "Your current password isn't right." }, 401);

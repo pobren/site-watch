@@ -16,6 +16,8 @@ Site Watch runs in your own Cloudflare account, on Cloudflare's free plan. Your 
 - **Websites.** Every 1 to 60 minutes. Down after two failed checks in a row, so one slow answer doesn't wake you. Optional rules: words the page must or mustn't contain, the status code, and a time limit.
 - **Certificates.** Looked up once a day in the public Certificate Transparency logs. Reminders 14, 7 and 1 days before a certificate runs out, or only when a self-renewing one (Let's Encrypt, Cloudflare) is late renewing.
 - **Domain renewals.** The registration date from the registry, with reminders 30, 7 and 1 days before.
+- **APIs.** Your own method (GET, POST, PUT, PATCH, DELETE or HEAD), headers and body, then the status, words, time limit and a JSON value it must equal (such as `status` equals `ok`). Anything under 400 counts as working unless you set a status. Header values are hidden once saved.
+- **DNS records.** A, AAAA, CNAME, MX, TXT, NS or CAA, looked up through Cloudflare's 1.1.1.1. Down when the records vanish or the name stops existing, or when they stop including the value you give (an address or mail server). Every 5 minutes or slower.
 - **Mail servers.** Checks your server answers and offers encryption, for sending (587, 465) and reading (993, 143, 995, 110). It never signs in. Port 25 can't be checked: Cloudflare doesn't allow it.
 - **Ports.** Any other server and port, such as SSH or a database.
 - **Heartbeats.** Your backup or scheduled job visits its own address each time it runs. If it doesn't check in on time, you hear about it.
@@ -27,6 +29,39 @@ When something keeps going up and down, you get one alert saying so instead of d
 Public pages showing whether things are working, 90 days of daily bars and your notices. Put one on its own domain, such as status.example.com. Only the names you choose are shown, never server addresses.
 
 <img src="docs/status-page.png" alt="A Site Watch status page on a phone" width="320">
+
+### Subscribers
+
+Visitors can subscribe to a status page by email (they confirm with a link first), add a Slack, Discord, Microsoft Teams or Google Chat room, add a webhook, or follow its Atom feed. They can pick only the things they care about. They hear when you post or resolve a notice, and (unless you turn it off for the page) when something on it goes down and comes back. Every email has a one click unsubscribe link.
+
+On the Status pages tab you can see who has subscribed, remove people and add addresses from a spreadsheet. Plans set how many email subscribers, emails a month and chat rooms each client gets (Admin tab). The owner has no limit.
+
+Subscriber emails go through Amazon SES when these Worker secrets are set, as SES costs far less for large lists:
+
+- `SES_ACCESS_KEY_ID` and `SES_SECRET_ACCESS_KEY`: a key that can only call `ses:SendRawEmail`
+- `SES_REGION`: such as `eu-west-1`
+
+The sending address (the one alerts come from) must be verified in SES. Without these secrets, subscriber emails go through the Cloudflare email binding like alerts.
+
+### Badge, widget and password
+
+Each public status page has a badge (`/status/<address>/badge.svg`) and a small widget for an iframe (`/status/<address>/widget`) that people can put on their own website. The Status pages tab gives the code to copy.
+
+On plans that allow it (Admin tab, "Status pages can have a password"), a page can have a password so only staff or a client can see it. Visitors type it once every 30 days. Private pages have no badge, widget or feed, and search engines are asked not to list them.
+
+### Planned maintenance
+
+Choose "Planned maintenance" when posting a notice and give it a start and an end. The status page shows it as planned until it starts, alerts for the monitors on that page wait while it runs, and it resolves itself (telling subscribers) when it ends.
+
+### Posting notices by email
+
+Turn on "Post notices by email" for a page and it gets a private address, such as `update-1a2b...@updates.example.com`. Anything the account's own email address sends there becomes a notice and goes to subscribers. Start the subject with `Maintenance:` or `Major:` to set the type, or `Resolved` to close the latest notice.
+
+To set it up, add a subdomain to Cloudflare Email Routing (such as updates.example.com), send all of its email to this Worker with a catch-all rule, and set the Worker variable `UPDATE_DOMAIN` to that subdomain.
+
+### Monthly uptime report
+
+On the first of each month, paid accounts get an email with last month's uptime and outages for each monitor. People can turn it off on the Account tab.
 
 ## API, webhooks and AI connector
 
@@ -126,6 +161,16 @@ Sign-in, set-up, forgotten password and client sign-up can use [Cloudflare Turns
 
 It switches on once both are there. Remove either one to switch it off.
 
+## Teams
+
+Accounts can give colleagues their own login on the Account tab, and add people who only get the alert emails:
+
+- **Admin**: adds and changes monitors, alerts and status pages, but not billing, the team, API keys or the account.
+- **Viewer**: sees everything but can't change it.
+- **Alerts only**: no login. They confirm their email address once, then get every alert email.
+
+Members can also choose to get the alert emails. Plans set the logins included (counting the account's own), the Stripe prices for each extra login (monthly and yearly, added to the same subscription and prorated), and how many alert-only people there may be. The owner has no limits. Team members sign in on the website; the apps sign in with the account's own login for now.
+
 ## Selling to clients
 
 1. In Stripe, make a product for each plan with a monthly or yearly price.
@@ -201,6 +246,14 @@ On its own, Site Watch checks about 40 things a minute, which is plenty for one 
 ```
 
 Make the queue first with `npx wrangler queues create site-watch-checks`. The Admin tab says when checks are running through it.
+
+## Second opinions from other regions
+
+Checks run from Cloudflare's network, wherever your Worker happens to run. When something fails twice in a row, small helpers in other regions (west Europe and east US, or Asia Pacific when one can't answer) try it too, and the "down" alert only goes if at least one of them agrees. If they can all reach it, the dashboard says it's only failing from the main check and no alert is sent. The helpers are Durable Objects pinned to their region (`PROBES` in `wrangler.jsonc`) and only work while something is failing. Remove the `durable_objects` and `migrations` blocks to check from one place only.
+
+### Speed from each region
+
+Plans can include "Speed from 3 regions" for some websites and APIs (Admin tab). Every 5 minutes the same helpers time them from west Europe, east US and Asia Pacific, and the dashboard shows each region's average and slowest hour over the last day beside the main check. The owner's own install times up to 25. Without the PROBES binding nothing changes.
 
 ## Your own home page and brand
 
