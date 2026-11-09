@@ -16,6 +16,8 @@ Site Watch runs in your own Cloudflare account, on Cloudflare's free plan. Your 
 - **Websites.** Every 1 to 60 minutes. Down after two failed checks in a row, so one slow answer doesn't wake you. Optional rules: words the page must or mustn't contain, the status code, and a time limit.
 - **Certificates.** Looked up once a day in the public Certificate Transparency logs. Reminders 14, 7 and 1 days before a certificate runs out, or only when a self-renewing one (Let's Encrypt, Cloudflare) is late renewing.
 - **Domain renewals.** The registration date from the registry, with reminders 30, 7 and 1 days before.
+- **APIs.** Your own method (GET, POST, PUT, PATCH, DELETE or HEAD), headers and body, then the status, words, time limit and a JSON value it must equal (such as `status` equals `ok`). Anything under 400 counts as working unless you set a status. Header values are hidden once saved.
+- **DNS records.** A, AAAA, CNAME, MX, TXT, NS or CAA, looked up through Cloudflare's 1.1.1.1. Down when the records vanish or the name stops existing, or when they stop including the value you give (an address or mail server). Every 5 minutes or slower.
 - **Mail servers.** Checks your server answers and offers encryption, for sending (587, 465) and reading (993, 143, 995, 110). It never signs in. Port 25 can't be checked: Cloudflare doesn't allow it.
 - **Ports.** Any other server and port, such as SSH or a database.
 - **Heartbeats.** Your backup or scheduled job visits its own address each time it runs. If it doesn't check in on time, you hear about it.

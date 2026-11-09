@@ -1,5 +1,11 @@
 # Changes
 
+## 1.10.0: API and DNS checks
+
+- **API checks**: choose the method, add headers (such as an Authorization token) and a body, and check the status, words, time and a JSON value, such as `status` equals `ok` or `data.ready` equals `true`. Anything under 400 counts as working unless a status is set. Header values only show their first few characters once saved, and editing without touching them keeps them.
+- **DNS checks**: A, AAAA, CNAME, MX, TXT, NS or CAA records through Cloudflare's 1.1.1.1. Down when they vanish, when the name no longer exists, or when they stop including the value you give. Every 5 minutes or slower.
+- Both count as one monitor each, are confirmed from other regions like everything else, and show on status pages and the Live view.
+
 ## 1.9.0: Failures confirmed from other regions
 
 - **Before a "down" alert goes**, helpers in two other Cloudflare regions (west Europe and east US, with Asia Pacific if one can't answer) try the same website, mail server or port.

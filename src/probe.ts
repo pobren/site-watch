@@ -7,8 +7,8 @@
 // check is failing, so they cost next to nothing. Without the PROBES binding everything works as before.
 
 import { DurableObject } from "cloudflare:workers";
-import { checkMail, checkPort, checkWebsite } from "./checks.ts";
-import { rulesOf, type Outcome } from "./core.ts";
+import { checkJob, type CheckJob } from "./checks.ts";
+import type { Outcome } from "./core.ts";
 import { configure } from "./whitelabel.ts";
 import type { Env, MonitorRow } from "./db.ts";
 
@@ -21,16 +21,14 @@ export const REGIONS: { hint: DurableObjectLocationHint; name: string }[] = [
 /** How long we wait for a helper. Its own checks give up after 15 seconds. */
 const WAIT_MS = 25_000;
 
-export interface ProbeJob { kind: MonitorRow["kind"]; url: string | null; rules: string | null; host: string | null; port: number | null; helloName: string }
+export type ProbeJob = CheckJob;
 export interface View { region: string; state: Outcome["state"]; why: string | null; ms: number | null }
 
 export class Probe extends DurableObject<Env> {
 	/** One check, from wherever this helper lives. */
 	async check(job: ProbeJob): Promise<{ state: Outcome["state"]; why: string | null; ms: number | null }> {
 		configure(this.env);
-		const r = job.kind === "website" ? await checkWebsite(job.url!, rulesOf(job.rules))
-			: job.kind === "mail" ? await checkMail(job.host!, job.port!, job.helloName)
-			: await checkPort(job.host!, job.port!);
+		const r = await checkJob(job);
 		return { state: r.outcome.state, why: "why" in r.outcome ? r.outcome.why : null, ms: r.ms };
 	}
 }

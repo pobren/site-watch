@@ -7,6 +7,7 @@
 import type { ApnsEnv } from "./apns.ts";
 import type { PhoneEnv } from "./phones.ts";
 import type { WhiteLabelEnv } from "./whitelabel.ts";
+import type { Kind } from "./core.ts";
 
 export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 	DB: D1Database;
@@ -47,7 +48,7 @@ export interface CheckBatch { ids: string[]; daily?: boolean; late?: boolean; at
 export interface MonitorRow {
 	id: string;
 	account_id: string;
-	kind: "website" | "mail" | "port" | "heartbeat";
+	kind: Kind;
 	name: string | null;
 	url: string | null;
 	host: string | null;

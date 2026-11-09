@@ -132,6 +132,8 @@ const JS = String.raw`
 const ICONS = {
 	pulse: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
 	plus: '<path d="M12 5v14M5 12h14"/>',
+	code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+	list: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
 	bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
 	page: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/>',
 	user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
@@ -219,8 +221,8 @@ const tz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone
 const when = (iso) => iso ? new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "";
 const ago = (iso) => { if (!iso) return "never"; const m = Math.round((Date.now() - Date.parse(iso)) / 60000); return m < 1 ? "just now" : m < 60 ? m + " min ago" : m < 1440 ? Math.round(m / 60) + " hr ago" : Math.round(m / 1440) + " days ago"; };
 const WORDS = { up: "Working", down: "Down", cert: "Certificate problem", blocked: "Turning our checks away", unsure: "Not answering once", paused: "Paused", checking: "Checking…" };
-const KIND = { website: "Website", mail: "Mail server", port: "Port", heartbeat: "Heartbeat" };
-const KIND_ICON = { website: "globe", mail: "mail", port: "plug", heartbeat: "heart" };
+const KIND = { website: "Website", api: "API", dns: "DNS", mail: "Mail server", port: "Port", heartbeat: "Heartbeat" };
+const KIND_ICON = { website: "globe", api: "code", dns: "list", mail: "mail", port: "plug", heartbeat: "heart" };
 const everyWords = (m) => m < 1 ? Math.round(m * 60) + " seconds" : m % 1440 === 0 ? (m === 1440 ? "day" : m / 1440 + " days") : m % 60 === 0 ? (m === 60 ? "hour" : m / 60 + " hours") : m === 1 ? "minute" : m + " minutes";
 
 function logo() {
@@ -488,7 +490,7 @@ function monitorCard(x) {
 	else facts.push(h("span", null, "Checked ", h("b", null, ago(x.checkedAt)), " · every " + everyWords(x.fast ? 0.5 : x.every)));
 	if (x.cert) facts.push(h("span", { class: x.cert.daysLeft <= 7 ? "t-down" : x.cert.daysLeft <= 21 && !x.cert.auto ? "t-unsure" : "" }, "Certificate ", h("b", null, x.cert.daysLeft + " days"), x.cert.auto ? " (renews itself)" : ""));
 	if (x.reg && x.reg.expires) facts.push(h("span", { class: x.reg.daysLeft <= 7 ? "t-down" : x.reg.daysLeft <= 30 ? "t-unsure" : "" }, "Domain renewal ", h("b", null, x.reg.daysLeft + " days")));
-	const sub = x.kind === "website" ? x.url : x.kind === "heartbeat" ? "Checks in every " + everyWords(x.every) : x.host + " port " + x.port;
+	const sub = x.kind === "website" || x.kind === "api" ? x.url : x.kind === "dns" ? x.host + " " + ((x.rules && x.rules.type) || "A") + " records" : x.kind === "heartbeat" ? "Checks in every " + everyWords(x.every) : x.host + " port " + x.port;
 	return h("div", { class: "card" },
 		h("div", { class: "mon" },
 			h("span", { class: "dot s-" + x.status, title: WORDS[x.status] }),
@@ -533,16 +535,54 @@ const rulesOf = (f) => ({ status: f.status.value, contains: f.contains.value, mi
 const rulesBlock = (f) => h("details", null, h("summary", { style: "font-weight:700;cursor:pointer;margin-top:12px" }, "Extra rules (optional)"),
 	h("div", { class: "two" }, field("Must contain", f.contains, "Words that are always on the page, such as your footer."), field("Must not contain", f.missing, "Such as Database error."), field("Status code", f.status, "Such as 200."), field("Slower than this counts as down (seconds)", f.maxMs)));
 
+// API checks: the method, headers (one "Name: value" a line), body and a JSON value to expect, on top of the usual rules.
+function apiFields(r) {
+	r = r || {};
+	const headersText = Object.entries(r.headers || {}).map(([k, v]) => k + ": " + v).join("\n");
+	const f = {
+		method: h("select", null, state.choices.apiMethods.map((m) => h("option", { value: m, selected: m === (r.method || "GET") }, m))),
+		headers: h("textarea", { rows: 3, placeholder: "Authorization: Bearer your-token" }, headersText),
+		body: h("textarea", { rows: 3, placeholder: '{"ping": true}' }, r.body || ""),
+		path: h("input", { placeholder: "status", value: r.json ? r.json.path : "" }),
+		equals: h("input", { placeholder: "ok", value: r.json ? r.json.equals : "" }),
+		rules: rulesFields(r),
+	};
+	f.headersStart = headersText;
+	return f;
+}
+function apiRulesOf(f) {
+	const out = { ...rulesOf(f.rules), method: f.method.value, body: f.body.value };
+	// Headers come back masked: only send them when they've been changed.
+	if (f.headers.value !== f.headersStart) out.headers = Object.fromEntries(f.headers.value.split("\n").map((l) => l.trim()).filter(Boolean).map((l) => { const at = l.indexOf(":"); return at > 0 ? [l.slice(0, at).trim(), l.slice(at + 1).trim()] : [l, ""]; }));
+	if (f.path.value.trim()) out.json = { path: f.path.value.trim(), equals: f.equals.value };
+	return out;
+}
+const apiBlock = (f) => [field("Method", f.method),
+	h("details", null, h("summary", { style: "font-weight:700;cursor:pointer;margin-top:12px" }, "Headers, body and expected answer (optional)"),
+		field("Headers", f.headers, "One a line, such as Authorization: Bearer your-token. Saved values are hidden after saving."),
+		field("Body", f.body, "Sent with POST, PUT and PATCH."),
+		h("div", { class: "two" }, field("JSON value", f.path, "Its path, such as status or data.ok."), field("Must equal", f.equals, "Such as ok or true.")),
+		h("div", { class: "two" }, field("Must contain", f.rules.contains), field("Must not contain", f.rules.missing), field("Status code", f.rules.status, "Without one, anything under 400 counts as working."), field("Slower than this counts as down (seconds)", f.rules.maxMs)))];
+
+function dnsFields(r) {
+	r = r || {};
+	return { type: h("select", null, state.choices.dnsTypes.map((t) => h("option", { value: t, selected: t === (r.type || "A") }, t))), expect: h("input", { placeholder: "Optional, such as 192.0.2.10 or mx.example.com", value: r.expect || "" }) };
+}
+const dnsRulesOf = (f) => ({ type: f.type.value, expect: f.expect.value });
+const dnsBlock = (f) => h("div", { class: "two" }, field("Record type", f.type), field("Must include", f.expect, "Alerts if the answer stops including this. Leave empty to alert only when the records vanish."));
+
 function editForm(x) {
 	const name = h("input", { value: x.name || "" });
 	const every = everySelect(x.kind, x.fast ? 0.5 : x.every);
 	const rf = x.kind === "website" ? rulesFields(x.rules) : null;
+	const af = x.kind === "api" ? apiFields(x.rules) : null;
+	const df = x.kind === "dns" ? dnsFields(x.rules) : null;
 	const extras = h("input", { type: "checkbox", checked: x.extras });
 	const card = h("div", { class: "note" },
 		field("Name", name), field(x.kind === "heartbeat" ? "How often it runs" : "How often to check", every),
-		rf ? rulesBlock(rf) : null,
+		rf ? rulesBlock(rf) : null, af ? apiBlock(af) : null, df ? dnsBlock(df) : null,
 		x.kind === "website" ? h("label", { class: "check" }, extras, "Watch the certificate and the domain's renewal date") : null,
-		h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/monitors/" + x.id, { name: name.value, every: Number(every.value), ...(rf ? { rules: rulesOf(rf), extras: extras.checked } : {}) }); editing = null; return r; }, "Saved"), "main")));
+		h("div", { class: "btns" }, btn("Save", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/monitors/" + x.id, { name: name.value, every: Number(every.value), ...(rf ? { rules: rulesOf(rf), extras: extras.checked } : af ? { rules: apiRulesOf(af) } : df ? { rules: dnsRulesOf(df) } : {}) }); editing = null; return r; }, "Saved"), "main")));
 	return card;
 }
 
@@ -550,27 +590,35 @@ let addKind = "website";
 function add() {
 	const lim = state.limits;
 	const tiles = [["website", "Website", "globe", "A web page answers, has the right words and loads in time. Plus its certificate and domain renewal."],
+		["api", "API", "code", "An API answers your request, with your own method, headers and body, and returns the JSON you expect."],
+		["dns", "DNS", "list", "A domain's DNS records are still there, and still point where they should."],
 		["mail", "Mail server", "mail", "Your mail server answers and offers encryption, for sending (587, 465) or reading (993, 143, 995, 110)."],
 		["port", "Port", "plug", "Any other server and port answers, such as a database or SSH."],
 		["heartbeat", "Heartbeat", "heart", "A backup or scheduled job checks in when it runs. Tells you when it doesn't."]];
 	const name = h("input", { placeholder: addKind === "heartbeat" ? "Nightly backup" : "Optional" });
 	const url = h("input", { placeholder: "https://example.com/", inputmode: "url" });
-	const host = h("input", { placeholder: addKind === "mail" ? "mail.example.com" : "server.example.com" });
+	const host = h("input", { placeholder: addKind === "mail" ? "mail.example.com" : addKind === "dns" ? "example.com" : "server.example.com" });
 	const port = addKind === "mail" ? h("select", null, state.choices.mailPorts.map((p) => h("option", { value: p.port }, p.port + ": " + p.name))) : h("input", { inputmode: "numeric", placeholder: "22" });
 	const every = everySelect(addKind, addKind === "heartbeat" ? 1440 : Math.max(5, state.choices.every[0]));
 	const rf = rulesFields();
+	const af = addKind === "api" ? apiFields() : null;
+	const df = addKind === "dns" ? dnsFields() : null;
 	const extras = h("input", { type: "checkbox", checked: true });
 	const used = state.monitors.length;
 	const form = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(form.querySelector("button[type=submit]"), async () => {
 		const body = { kind: addKind, name: name.value, every: Number(every.value) };
 		if (addKind === "website") Object.assign(body, { url: url.value, rules: rulesOf(rf), extras: extras.checked });
 		if (addKind === "mail" || addKind === "port") Object.assign(body, { host: host.value, port: Number(port.value) });
+		if (addKind === "api") Object.assign(body, { url: url.value, rules: apiRulesOf(af) });
+		if (addKind === "dns") Object.assign(body, { host: host.value, rules: dnsRulesOf(df) });
 		const r = await api("/api/monitors", body);
 		open.add(r.added); tab = "overview"; location.hash = "overview";
 		return r;
 	}, "Added. It's been checked once already."); } },
 		addKind === "website" ? [field("Web address", url, "The home page, or any page such as a login or shop page."), field("Name", name), field("How often to check", every), rulesBlock(rf), h("label", { class: "check" }, extras, "Watch the certificate and the domain's renewal date")] : null,
 		addKind === "mail" || addKind === "port" ? [field("Server name", host), field("Port", port, addKind === "mail" ? "Port 25 can't be checked from Cloudflare, which doesn't allow it." : "Any port except 25."), field("Name", name), field("How often to check", every)] : null,
+		addKind === "api" ? [field("API address", url, "Such as https://api.example.com/health."), field("Name", name), field("How often to check", every), ...apiBlock(af)] : null,
+		addKind === "dns" ? [field("Domain or name", host, "Such as example.com or mail.example.com."), dnsBlock(df), field("Name", name), field("How often to check", every)] : null,
 		addKind === "heartbeat" ? [field("Name", name, "So you know which job it is."), field("How often the job runs", every), h("p", { class: "hint" }, "Once it's added you'll get an address for the job to visit each time it runs.")] : null,
 		h("div", { class: "btns" }, h("button", { class: "btn main", type: "submit" }, icon("plus"), "Start watching")));
 	return h("div", null, h("h1", null, "Add something to watch"),

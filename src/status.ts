@@ -35,7 +35,7 @@ export async function statusData(db: D1Database, page: PageRow, now = new Date()
 		const paused = !!r.paused_until && r.paused_until > iso(now);
 		const shown = shownOf(statusOf(s, !!r.checked_at, paused));
 		// Only the name goes on the public page: never the server's address or the heartbeat link.
-		const name = r.name ?? (r.kind === "website" ? new URL(r.url!).hostname : r.kind === "heartbeat" ? "Scheduled job" : "Server");
+		const name = r.name ?? (r.kind === "website" || r.kind === "api" ? new URL(r.url!).hostname : r.kind === "heartbeat" ? "Scheduled job" : r.kind === "dns" ? r.host! : "Server");
 		return { name, state: shown, uptime90: uptime(s, now, 90), bars: dailyBars(s, now).map((b) => b.up) };
 	});
 	const { results: notices } = await db.prepare("SELECT * FROM notices WHERE page_id = ? AND (resolved_at IS NULL OR resolved_at > ?) ORDER BY resolved_at IS NOT NULL, created_at DESC LIMIT 20")

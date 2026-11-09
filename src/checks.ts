@@ -3,7 +3,7 @@
 // What the answers mean is decided in core.ts.
 
 import { connect } from "cloudflare:sockets";
-import { certFromCt, connectWhy, domainOf, iso, mailDialog, mailPort, pageOutcome, rdapExpiry, type Cert, type CtEntry, type MailIo, type Outcome, type Registration, type Rules } from "./core.ts";
+import { apiOutcome, certFromCt, connectWhy, dnsOutcome, domainOf, iso, mailDialog, mailPort, pageOutcome, rdapExpiry, rulesOf, type ApiRules, type Cert, type CtEntry, type DnsRules, type DohAnswer, type Kind, type MailIo, type Outcome, type Registration, type Rules } from "./core.ts";
 
 import { WL } from "./whitelabel.ts";
 
@@ -42,6 +42,44 @@ export async function checkWebsite(url: string, rules: Rules): Promise<Result> {
 	} catch (e) {
 		return { outcome: pageOutcome({ error: e instanceof Error ? `${e.name} ${e.message}` : String(e), ms: Date.now() - started }, rules), ms: null };
 	}
+}
+
+/** An API call: your method, headers and body, then the status, words, time and JSON value. */
+export async function checkApi(url: string, rules: ApiRules): Promise<Result> {
+	const started = Date.now();
+	try {
+		const headers: Record<string, string> = { "user-agent": agent(), accept: "application/json, */*", ...(rules.headers ?? {}) };
+		if (rules.body && !Object.keys(headers).some((k) => k.toLowerCase() === "content-type")) headers["content-type"] = /^\s*[[{]/.test(rules.body) ? "application/json" : "text/plain";
+		const res = await fetch(url, { method: rules.method ?? "GET", headers, body: rules.body, redirect: "follow", signal: AbortSignal.timeout(PAGE_TIMEOUT * 1000) });
+		const ms = Date.now() - started;
+		const body = rules.contains || rules.missing || rules.json ? await readSome(res) : (await res.body?.cancel(), "");
+		return { outcome: apiOutcome({ status: res.status, ms, body }, rules), ms };
+	} catch (e) {
+		return { outcome: apiOutcome({ error: e instanceof Error ? `${e.name} ${e.message}` : String(e), ms: Date.now() - started }, rules), ms: null };
+	}
+}
+
+/** A DNS lookup through Cloudflare's 1.1.1.1 (DNS over HTTPS), so it sees what the world sees. */
+export async function checkDns(host: string, rules: DnsRules): Promise<Result> {
+	const started = Date.now();
+	try {
+		const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(host)}&type=${rules.type}`, { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(SOCKET_TIMEOUT * 1000) });
+		if (!res.ok) return { outcome: dnsOutcome({ error: String(res.status) }, host, rules), ms: null };
+		const answer = await res.json<DohAnswer>();
+		return { outcome: dnsOutcome({ answer }, host, rules), ms: Date.now() - started };
+	} catch (e) {
+		return { outcome: dnsOutcome({ error: String(e) }, host, rules), ms: null };
+	}
+}
+
+/** One check of anything but a heartbeat, from wherever this runs (the cron, the queue or a helper in another region). */
+export interface CheckJob { kind: Kind; url: string | null; rules: string | null; host: string | null; port: number | null; helloName: string }
+export function checkJob(j: CheckJob): Promise<Result> {
+	if (j.kind === "website") return checkWebsite(j.url!, rulesOf(j.rules));
+	if (j.kind === "api") return checkApi(j.url!, rulesOf(j.rules) as ApiRules);
+	if (j.kind === "dns") return checkDns(j.host!, rulesOf(j.rules) as unknown as DnsRules);
+	if (j.kind === "mail") return checkMail(j.host!, j.port!, j.helloName);
+	return checkPort(j.host!, j.port!);
 }
 
 function timeout<T>(secs: number): { promise: Promise<T>; clear: () => void } {

@@ -27,7 +27,7 @@ export async function renderLive(db: D1Database, token: string): Promise<Respons
 		const paused = !!r.paused_until && r.paused_until > iso(now);
 		const status = statusOf(s, !!r.checked_at, paused);
 		// The name the owner gave it, or the website's address; servers and heartbeats show just their kind.
-		const name = r.name ?? (r.kind === "website" ? labelOf(r) : r.kind === "heartbeat" ? "Scheduled job" : r.kind === "mail" ? "Mail server" : "Server");
+		const name = r.name ?? (r.kind === "website" ? labelOf(r) : r.kind === "heartbeat" ? "Scheduled job" : r.kind === "mail" ? "Mail server" : r.kind === "api" ? "API" : r.kind === "dns" ? "DNS" : "Server");
 		return { name, status, down: isDown(s), ms: s.ms, up30: uptime(s, now, 30), line: responseTimes(s).slice(-24).map((p) => p.ms) };
 	}).sort((a, b) => (RANK[a.status] ?? 5) - (RANK[b.status] ?? 5));
 	const alerts = account.live_alerts === 1

@@ -10,7 +10,7 @@ import { currentAccount } from "./auth.ts";
 import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
-	CHANNEL_NAMES, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
+	CHANNEL_NAMES, cleanApiRules, cleanDnsRules, DNS_TYPES, API_METHODS, type ApiRules, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
 	isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, stateOf, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
 import { DEFAULT_BRAND, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
@@ -28,13 +28,20 @@ export function pageAddress(env: Env, origin: string, slug: string): string {
 
 const bad = (error: string, status = 400) => json({ error }, status);
 
+/** A monitor's rules as shown: API header values work like passwords, so only their start is shown. */
+function shownRules(r: MonitorRow) {
+	const rules = rulesOf(r.rules) as ApiRules;
+	if (r.kind !== "api" || !rules.headers) return rules;
+	return { ...rules, headers: Object.fromEntries(Object.entries(rules.headers).map(([k, v]) => [k, v.length > 8 ? `${v.slice(0, 4)}…` : "…"])) };
+}
+
 export function shape(r: MonitorRow, origin: string, now = new Date()) {
 	const s = stateOf(r.state);
 	const paused = !!r.paused_until && r.paused_until > iso(now);
 	const cert = r.cert ? JSON.parse(r.cert) : null;
 	const reg = r.reg ? JSON.parse(r.reg) : null;
 	return {
-		id: r.id, kind: r.kind, label: labelOf(r), name: r.name, url: r.url, host: r.host, port: r.port, rules: rulesOf(r.rules),
+		id: r.id, kind: r.kind, label: labelOf(r), name: r.name, url: r.url, host: r.host, port: r.port, rules: shownRules(r),
 		// 30 second checks are stored as every 0.5 but shown as every 1 with fast set, so apps that expect whole minutes carry on.
 		every: r.every < 1 ? 1 : r.every, fast: r.every < 1, extras: r.extras === 1,
 		status: statusOf(s, !!r.checked_at, paused), why: s.blocked ?? s.why ?? s.certProblem, since: isDown(s) ? s.since : null, ms: s.ms,
@@ -99,7 +106,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
 		// Regions that confirm a failure before a "down" alert, when this install has them (probe.ts).
 		regions: env.PROBES ? REGIONS.map((r) => r.name) : [],
-		choices: { every: everyChoices(limits).filter((n) => n >= 1), fast: limits.fast, heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS },
+		choices: { every: everyChoices(limits).filter((n) => n >= 1), fast: limits.fast, heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS, dnsTypes: DNS_TYPES, apiMethods: API_METHODS },
 		limits,
 		brand: inst.brand,
 		apiKeys: await listKeys(db, me.id),
@@ -152,7 +159,19 @@ function newMonitor(b: Record<string, unknown>, accountId: string, choices: numb
 	};
 	const every = b.fast === true ? FAST_EVERY : Number(b.every);
 	const pick = (n: number) => (choices.includes(n) ? n : Math.max(DEFAULT_EVERY, choices.find((x) => x >= 1) ?? DEFAULT_EVERY));
-	if (kind === "website") {
+	if (kind === "api") {
+		const url = cleanUrl(b.url);
+		if (!url) return { error: "Please enter the API address to call, such as https://api.example.com/health." };
+		const rules = cleanApiRules(b.rules);
+		if ("error" in rules) return rules;
+		Object.assign(row, { url, rules: JSON.stringify(rules), every: pick(every), extras: 0 });
+	} else if (kind === "dns") {
+		const host = cleanHost(b.host);
+		if (!host) return { error: "Please enter the domain or name to look up, such as example.com." };
+		const rules = cleanDnsRules(b.rules);
+		if ("error" in rules) return rules;
+		Object.assign(row, { host, rules: JSON.stringify(rules), every: pick(Math.max(every, 5)), extras: 0 });
+	} else if (kind === "website") {
 		const url = cleanUrl(b.url);
 		if (!url) return { error: "Please enter the web address to watch, such as https://example.com/." };
 		const rules = cleanRules(b.rules);
@@ -306,8 +325,11 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			every = n;
 		}
 		let rules = row.rules;
-		if (row.kind === "website" && "rules" in b) {
-			const r = cleanRules(b.rules);
+		if ((row.kind === "website" || row.kind === "api" || row.kind === "dns") && "rules" in b) {
+			// API headers come back masked, so leaving them out keeps the ones already saved.
+			const given = b.rules && typeof b.rules === "object" ? { ...(b.rules as Record<string, unknown>) } : {};
+			if (row.kind === "api" && !("headers" in given)) given.headers = (rulesOf(row.rules) as ApiRules).headers;
+			const r = row.kind === "api" ? cleanApiRules(given) : row.kind === "dns" ? cleanDnsRules(given) : cleanRules(given);
 			if ("error" in r) return bad(r.error);
 			rules = JSON.stringify(r);
 		}

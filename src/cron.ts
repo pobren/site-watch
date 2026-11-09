@@ -4,7 +4,7 @@
 // website's certificate and domain renewal date are looked up too, with reminders before either runs out.
 
 import { deliver } from "./alerts.ts";
-import { checkMail, checkPort, checkWebsite, lookupCert, lookupRegistration, type Result } from "./checks.ts";
+import { checkJob, lookupCert, lookupRegistration, type Result } from "./checks.ts";
 import {
 	alertFor, askAgain, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, stateOf, step, weighOpinions,
 	type Cert, type Registration,
@@ -38,10 +38,8 @@ async function inBatches<T>(items: T[], size: number, fn: (x: T) => Promise<void
 }
 
 export async function look(row: MonitorRow, now: Date, helloName: string): Promise<Result> {
-	if (row.kind === "website") return checkWebsite(row.url!, rulesOf(row.rules));
-	if (row.kind === "mail") return checkMail(row.host!, row.port!, helloName);
-	if (row.kind === "port") return checkPort(row.host!, row.port!);
-	return { outcome: heartbeatOutcome(row.every, row.last_ping, row.created_at, now), ms: null };
+	if (row.kind === "heartbeat") return { outcome: heartbeatOutcome(row.every, row.last_ping, row.created_at, now), ms: null };
+	return checkJob({ kind: row.kind, url: row.url, rules: row.rules, host: row.host, port: row.port, helloName });
 }
 
 /** Checks one monitor, saves what it found and sends any alerts. `late`: a failure isn't counted. */

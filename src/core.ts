@@ -2,7 +2,7 @@
 // cleaning what you type, what one check means, how a monitor's state moves on, uptime, certificates, domain
 // renewals and the mail server conversation. checks.ts does the network side and cron.ts the scheduling.
 
-export type Kind = "website" | "mail" | "port" | "heartbeat";
+export type Kind = "website" | "api" | "dns" | "mail" | "port" | "heartbeat";
 export type Proto = "smtp" | "imap" | "pop3";
 
 /** Failed checks in a row before we call something down, so one slow answer doesn't send an alert. */
@@ -110,6 +110,109 @@ export function rulesOf(saved: string | null): Rules {
 	} catch {
 		return {};
 	}
+}
+
+// -- API and DNS checks (1.10.0) -----------------------------------------------------------------
+
+export const API_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"] as const;
+export interface ApiRules extends Rules {
+	method?: (typeof API_METHODS)[number];
+	headers?: Record<string, string>;
+	body?: string;
+	/** A value in the JSON answer, by its path ("status" or "data.items.0.ok"), and what it must equal. */
+	json?: { path: string; equals: string };
+}
+
+/** What an API check sends and expects. Header values work like passwords, so they're never shown back in full. */
+export function cleanApiRules(input: unknown): ApiRules | { error: string } {
+	const base = cleanRules(input);
+	if ("error" in base) return base;
+	const r = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+	const out: ApiRules = { ...base };
+	const method = typeof r.method === "string" ? r.method.toUpperCase() : "GET";
+	if (!(API_METHODS as readonly string[]).includes(method)) return { error: "Please choose GET, POST, PUT, PATCH, DELETE or HEAD." };
+	if (method !== "GET") out.method = method as ApiRules["method"];
+	if (r.headers && typeof r.headers === "object") {
+		const list = Object.entries(r.headers as Record<string, unknown>).filter(([k, v]) => k.trim() && typeof v === "string");
+		if (list.length > 10) return { error: "Please use 10 headers or fewer." };
+		const headers: Record<string, string> = {};
+		for (const [k, v] of list) {
+			const name = k.trim();
+			if (!/^[A-Za-z0-9-]{1,60}$/.test(name)) return { error: `"${name}" isn't a header name we can send. Use letters, numbers and dashes.` };
+			if (/^(host|content-length|connection|transfer-encoding)$/i.test(name)) return { error: `The ${name} header is set for you.` };
+			if ((v as string).length > 2000 || /[\r\n]/.test(v as string)) return { error: `The ${name} header is too long or has a line break.` };
+			headers[name] = v as string;
+		}
+		if (Object.keys(headers).length) out.headers = headers;
+	}
+	if (typeof r.body === "string" && r.body.trim()) {
+		if (method === "GET" || method === "HEAD") return { error: "GET and HEAD requests can't send a body. Choose POST or PUT instead." };
+		if (r.body.length > 4000) return { error: "Please keep the body under 4,000 characters." };
+		out.body = r.body;
+	}
+	const j = r.json as Record<string, unknown> | undefined;
+	if (j && typeof j.path === "string" && j.path.trim()) {
+		const path = j.path.trim().replace(/^\$\.?/, "");
+		if (!/^[A-Za-z0-9_\-]+(\.[A-Za-z0-9_\-]+){0,9}$/.test(path)) return { error: "Please give the JSON value as a path like status or data.items.0.ok." };
+		out.json = { path, equals: String(j.equals ?? "").slice(0, 200) };
+	}
+	return out;
+}
+
+/** The value at a dotted path in parsed JSON, or undefined. */
+export function jsonAt(data: unknown, path: string): unknown {
+	let at: unknown = data;
+	for (const part of path.split(".")) {
+		if (at === null || typeof at !== "object") return undefined;
+		at = (at as Record<string, unknown>)[part];
+	}
+	return at;
+}
+
+/** One API call with its rules: under 400 counts as working unless a status is set, then the words, time and JSON value. */
+export function apiOutcome(result: { status?: number; error?: string; ms: number; body?: string }, rules: ApiRules): Outcome {
+	if (result.error !== undefined) return classify(result);
+	const status = result.status ?? 0;
+	if (rules.status === undefined && status >= 400) return status >= 500 ? classify(result) : { state: "down", why: `it answered with status ${status}` };
+	const page = pageOutcome(result, rules);
+	if (page.state !== "up" || !rules.json) return page;
+	let data: unknown;
+	try {
+		data = JSON.parse(result.body ?? "");
+	} catch {
+		return { state: "down", why: "its answer wasn't JSON" };
+	}
+	const got = jsonAt(data, rules.json.path);
+	if (got === undefined) return { state: "down", why: `its answer has no ${rules.json.path}` };
+	const text = typeof got === "string" ? got : JSON.stringify(got);
+	if (text !== rules.json.equals) return { state: "down", why: `${rules.json.path} was ${text.slice(0, 60)}, not ${rules.json.equals}` };
+	return page;
+}
+
+export const DNS_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "NS", "CAA"] as const;
+export interface DnsRules { type: (typeof DNS_TYPES)[number]; /** Words one of the answers must contain, such as an address or mail server. */ expect?: string }
+
+export function cleanDnsRules(input: unknown): DnsRules | { error: string } {
+	const r = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+	const type = typeof r.type === "string" ? r.type.toUpperCase() : "A";
+	if (!(DNS_TYPES as readonly string[]).includes(type)) return { error: "Please choose a record type: A, AAAA, CNAME, MX, TXT, NS or CAA." };
+	const out: DnsRules = { type: type as DnsRules["type"] };
+	if (typeof r.expect === "string" && r.expect.trim()) out.expect = r.expect.trim().slice(0, 200);
+	return out;
+}
+
+/** A DNS over HTTPS answer (application/dns-json): Status 0 is fine, 3 is "no such name". */
+export interface DohAnswer { Status: number; Answer?: { type: number; data: string }[] }
+const DNS_CODES: Record<string, number> = { A: 1, NS: 2, CNAME: 5, MX: 15, TXT: 16, AAAA: 28, CAA: 257 };
+
+export function dnsOutcome(result: { answer?: DohAnswer; error?: string }, host: string, rules: DnsRules): Outcome {
+	if (result.error !== undefined || !result.answer) return { state: "down", why: "the DNS lookup didn't answer" };
+	if (result.answer.Status === 3) return { state: "down", why: `${host} doesn't exist in DNS any more` };
+	if (result.answer.Status !== 0) return { state: "down", why: `the DNS lookup failed (code ${result.answer.Status})` };
+	const records = (result.answer.Answer ?? []).filter((a) => a.type === DNS_CODES[rules.type]).map((a) => a.data.replace(/^"|"$/g, ""));
+	if (!records.length) return { state: "down", why: `${host} has no ${rules.type} records` };
+	if (rules.expect && !records.some((d) => d.toLowerCase().includes(rules.expect!.toLowerCase()))) return { state: "down", why: `its ${rules.type} records no longer include ${rules.expect} (found ${records.slice(0, 3).join(", ").slice(0, 120)})` };
+	return { state: "up" };
 }
 
 // -- What one check means -----------------------------------------------------------------------
@@ -546,6 +649,15 @@ export function labelOf(m: MonitorLike): string {
 		}
 	}
 	if (m.kind === "heartbeat") return "Heartbeat";
+	if (m.kind === "api") {
+		try {
+			const u = new URL(m.url ?? "");
+			return `${u.hostname}${u.pathname}`;
+		} catch {
+			return m.url ?? "API";
+		}
+	}
+	if (m.kind === "dns") return `${m.host} DNS`;
 	return `${m.host}:${m.port}`;
 }
 
@@ -591,6 +703,8 @@ const EVENT_TYPE: Record<Event["kind"], WebhookType> = { down: "monitor.down", u
 
 const ADVICE: Record<Kind, string> = {
 	website: "Worth checking: your hosting company's status page, whether a payment for the hosting has failed, and any recent change to the website or its DNS records. If it works for you, a firewall or security plugin may be blocking Cloudflare's addresses.",
+	api: "Worth checking: your API's logs and recent deploys, whether a key or token it needs has run out, and your hosting company's status page.",
+	dns: "Worth checking: your DNS provider's dashboard for recent changes, whether the domain's registration has lapsed, and whether its name servers changed.",
 	mail: "Worth checking: your mail provider's status page, whether a payment has failed, and any recent change to the server, its firewall or its DNS records.",
 	port: "Worth checking: whether the service on that port is running, the server's firewall, and any recent change to its DNS records.",
 	heartbeat: "This usually means the job didn't run, or ran but failed before it could check in. Worth checking: the job's own log, the server it runs on, and whether its schedule changed.",
@@ -619,7 +733,7 @@ export function alertFor(m: MonitorLike & { every: number }, e: Event, tz: strin
 
 function alertText(m: MonitorLike & { every: number }, e: Event, tz: string, link: string, app: string): Alert {
 	const label = labelOf(m);
-	const what = m.kind === "website" ? m.url : m.kind === "heartbeat" ? `the "${label}" heartbeat` : `${m.host} port ${m.port}`;
+	const what = m.kind === "website" ? m.url : m.kind === "api" ? `the API at ${m.url}` : m.kind === "dns" ? `the DNS for ${m.host}` : m.kind === "heartbeat" ? `the "${label}" heartbeat` : `${m.host} port ${m.port}`;
 	const end = `Open ${app}: ${link}`;
 	const apart = m.every < 1 ? `${Math.round(m.every * 60)} seconds apart` : m.every === 1 ? "a minute apart" : `${m.every} minutes apart`;
 	switch (e.kind) {

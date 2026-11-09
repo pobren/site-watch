@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import {
-	askAgain, weighOpinions, alertFor, certAlert, CHECK_EVERY, FAST_EVERY, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
+	askAgain, weighOpinions, apiOutcome, cleanApiRules, cleanDnsRules, dnsOutcome, alertFor, certAlert, CHECK_EVERY, FAST_EVERY, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
 	pageOutcome, payloadFor, rawEmail, rdapExpiry, reminderDue, remindersPassed, renewalAlert, step, stateOf, statusOf, uptime, verifyStripe, webhookHeaders, type MailIo, type State,
 } from "../src/core.ts";
 
@@ -233,4 +233,24 @@ test("other regions: no helpers means the alert goes as before", () => {
 	let s = step(stateOf(null), { state: "down", why: "x" }, now).next;
 	const r = step(s, { state: "down", why: "x" }, now);
 	assert.equal(weighOpinions(r.next, r.events, null, now).events.some((e) => e.kind === "down"), true);
+});
+
+test("API checks: status, JSON value and cleaning", () => {
+	assert.deepEqual(apiOutcome({ status: 200, ms: 100, body: '{"status":"ok","data":{"n":3}}' }, { json: { path: "status", equals: "ok" } }), { state: "up" });
+	assert.equal(apiOutcome({ status: 200, ms: 100, body: '{"data":{"n":3}}' }, { json: { path: "data.n", equals: "4" } }).state, "down");
+	assert.equal(apiOutcome({ status: 404, ms: 100 }, {}).state, "down");
+	assert.equal(apiOutcome({ status: 200, ms: 100, body: "<html>" }, { json: { path: "ok", equals: "true" } }).state, "down");
+	assert.deepEqual(cleanApiRules({ method: "post", body: '{"a":1}', headers: { Authorization: "Bearer x" }, json: { path: "$.ok", equals: true } }), { method: "POST", body: '{"a":1}', headers: { Authorization: "Bearer x" }, json: { path: "ok", equals: "true" } });
+	assert.ok("error" in cleanApiRules({ method: "GET", body: "x" }));
+	assert.ok("error" in cleanApiRules({ headers: { Host: "x" } }));
+});
+
+test("DNS checks: records there, expected value, no such name", () => {
+	const answer = { Status: 0, Answer: [{ type: 15, data: "10 mx1.example.net." }] };
+	assert.deepEqual(dnsOutcome({ answer }, "example.com", { type: "MX" }), { state: "up" });
+	assert.deepEqual(dnsOutcome({ answer }, "example.com", { type: "MX", expect: "mx1.example.net" }), { state: "up" });
+	assert.equal(dnsOutcome({ answer }, "example.com", { type: "MX", expect: "google" }).state, "down");
+	assert.equal(dnsOutcome({ answer: { Status: 3 } }, "gone.example", { type: "A" }).state, "down");
+	assert.equal(dnsOutcome({ answer: { Status: 0, Answer: [] } }, "example.com", { type: "A" }).state, "down");
+	assert.ok("error" in cleanDnsRules({ type: "SRVX" }));
 });
