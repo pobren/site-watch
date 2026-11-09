@@ -126,9 +126,10 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		brand: inst.brand,
 		apiKeys: await listKeys(db, me.id),
 		connector: { address: `${origin}/mcp`, api: `${origin}/api/v1`, linked: await connectorLinked(db, me.id, Date.now()) },
-		apps: { list: await listApps(db, me.id, me.session_ver), alerts: apnsReady(env), canDelete: me.role === "client" },
+		apps: { list: await listApps(db, me.id, me.session_ver), alerts: apnsReady(env), canDelete: me.role === "client" && !me.member },
 	};
-	if (me.role === "owner") {
+	// The Admin tab's data is for the owner's own login, never a team member's (team.ts).
+	if (me.role === "owner" && !me.member) {
 		const [clients, plans] = await Promise.all([
 			db.prepare(`SELECT a.id, a.email, a.name, a.plan, a.status, a.period_end, a.created_at, (SELECT COUNT(*) FROM monitors m WHERE m.account_id = a.id) AS monitors
 				FROM accounts a WHERE a.role = 'client' ORDER BY a.created_at DESC LIMIT 500`).all(),
@@ -238,7 +239,7 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	if (!me) return bad("Please sign in.", 401);
 
 	const inst = await install(db);
-	if (me.role === "owner" && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
+	if (me.role === "owner" && !me.member && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
 	const method = request.method;
 
 	if (path === "/api/state" && method === "GET") return json(await everything(env, me, url.origin));
@@ -458,8 +459,8 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 	if (path === "/api/settings" && method === "POST") {
 		// A team member's own name, and whether they get the alert emails too. Everything else is the account's.
 		if (me.member) {
-			if ("name" in b) await db.prepare("UPDATE members SET name = ? WHERE id = ?").bind(cleanName(b.name, 80), me.member.id).run();
-			if (typeof b.alerts === "boolean") await db.prepare("UPDATE members SET alerts = ? WHERE id = ?").bind(b.alerts ? 1 : 0, me.member.id).run();
+			if ("name" in b) { me.member.name = cleanName(b.name, 80); await db.prepare("UPDATE members SET name = ? WHERE id = ?").bind(me.member.name, me.member.id).run(); }
+			if (typeof b.alerts === "boolean") { me.member.alerts = b.alerts; await db.prepare("UPDATE members SET alerts = ? WHERE id = ?").bind(b.alerts ? 1 : 0, me.member.id).run(); }
 			return reply({ ok: true });
 		}
 		let alertTo = me.alert_to;

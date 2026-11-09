@@ -29,7 +29,7 @@ export async function handleAuth(request: Request, env: Env, path: string, url: 
 		const owner = await db.prepare("SELECT 1 FROM accounts WHERE role = 'owner'").first();
 		const me = await currentAccount(request, db);
 		const inst = await install(db);
-		return json({ signedIn: !!me, role: me?.role ?? null, member: me?.member?.role ?? null, hasOwner: !!owner, brand: inst.brand, sell: inst.sell, turnstile: turnstileKey(env) });
+		return json({ signedIn: !!me, role: me?.member ? "member" : me?.role ?? null, member: me?.member?.role ?? null, hasOwner: !!owner, brand: inst.brand, sell: inst.sell, turnstile: turnstileKey(env) });
 	}
 	if (request.method !== "POST") return null;
 

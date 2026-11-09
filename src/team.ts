@@ -32,6 +32,8 @@ export function memberMay(a: Pick<AccountRow, "member">, method: string, path: s
 	const m = a.member;
 	if (!m) return null;
 	if (method === "GET") return null;
+	// Their own name, alerts and password are theirs to change (the password is handled before this).
+	if (path === "/api/settings") return null;
 	if (m.role === "viewer") return "Your login can look at everything but not change it. Ask the account's owner if you need to.";
 	if (/^\/api\/(team|keys|billing|account|admin|app\/(devices|qr)|live-link|connector)(\/|$)/.test(path)) return "Only the account's owner can change this.";
 	return null;
@@ -123,12 +125,13 @@ export async function handleTeam(request: Request, env: Env, me: AccountRow, pat
 	if (one && !m) return { error: "We couldn't find them on your team.", status: 404 };
 	if (m && method === "DELETE") {
 		await db.prepare("DELETE FROM members WHERE id = ?").bind(m.id).run();
+		// Their sessions end with them: the cookie names a member that no longer exists.
 		if (m.role !== "alerts") await syncSeats(env, me).catch((e) => console.error("team seats", e));
 		return null;
 	}
 	if (m && method === "POST") {
 		// Admin and viewer can swap; alert-only people stay alert only (they have no login to change).
-		if (m.role !== "alerts" && (b.role === "admin" || b.role === "viewer")) await db.prepare("UPDATE members SET role = ?, session_ver = session_ver + ? WHERE id = ?").bind(b.role, b.role === m.role ? 0 : 1, m.id).run();
+		if (m.role !== "alerts" && (b.role === "admin" || b.role === "viewer")) await db.prepare("UPDATE members SET role = ? WHERE id = ?").bind(b.role, m.id).run();
 		if (m.role !== "alerts" && typeof b.alerts === "boolean") await db.prepare("UPDATE members SET alerts = ? WHERE id = ?").bind(b.alerts ? 1 : 0, m.id).run();
 		return null;
 	}

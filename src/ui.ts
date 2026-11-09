@@ -413,7 +413,7 @@ function shell(content) {
 	const tabs = [["overview", "Overview", "pulse"], ["add", "Add", "plus"], ["alerts", "Alerts", "bell"], ["pages", "Status pages", "page"], ["account", "Account", "user"]];
 	// Viewers on a team can look but not add (team.ts).
 	if (state.me.member && state.me.member.role === "viewer") tabs.splice(1, 1);
-	if (state.me.role === "owner") tabs.push(["admin", "Admin", "cog"]);
+	if (state.me.role === "owner" && !state.me.member) tabs.push(["admin", "Admin", "cog"]);
 	app.replaceChildren(
 		h("div", { class: "top" }, h("div", { class: "in" }, logo(), h("nav", null, tabs.map(([id, label, ic]) => h("button", { class: tab === id ? "on" : "", onclick: () => go(id) }, icon(ic), label))))),
 		h("main", null, flashText ? msg("ok", flashText) : null, content, h("p", { class: "foot" }, brand().name + " " + window.SW.version)),
@@ -809,7 +809,7 @@ function teamCard() {
 		room ? h("p", { class: "hint" }, room) : null,
 		t.members.length ? h("table", null, h("tr", null, h("th", null, "Who"), h("th", null, "Role"), h("th", null, "")),
 			t.members.map((m) => {
-				const r = m.role === "alerts" ? null : h("select", { onchange: (e) => act(e.target, () => api("/api/team/" + m.id, { role: e.target.value }), "Role changed") }, ["admin", "viewer"].map((x) => h("option", { value: x, selected: x === m.role }, ROLE_WORDS[x])));
+				const r = m.role === "alerts" ? null : h("select", { style: "min-width:110px", onchange: (e) => act(e.target, () => api("/api/team/" + m.id, { role: e.target.value }), "Role changed") }, ["admin", "viewer"].map((x) => h("option", { value: x, selected: x === m.role }, ROLE_WORDS[x])));
 				return h("tr", null, h("td", null, h("b", null, m.name || m.email), m.name ? h("div", { class: "hint" }, m.email) : null, m.accepted ? null : h("span", { class: "kind" }, "invited")),
 					h("td", null, r || ROLE_WORDS[m.role]), h("td", null, btn("Remove", "trash", (e) => { if (confirm("Remove " + (m.name || m.email) + " from your team?")) act(e.currentTarget, () => api("/api/team/" + m.id, undefined, "DELETE"), "Removed"); }, "small danger")));
 			})) : null,
