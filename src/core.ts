@@ -174,8 +174,10 @@ export interface State {
 	ms: number | null;
 	/** Set while it keeps going up and down: when the one alert about it went. */
 	flapping: string | null;
+	/** Set while it only fails from our own check: when other regions last said they could reach it, and which. */
+	regional?: { at: string; ok: string[] } | null;
 }
-export const NEW_STATE: State = { fails: 0, since: null, why: null, alerted: false, certFails: 0, certProblem: null, blockedFails: 0, blocked: null, outages: [], days: {}, hours: {}, ms: null, flapping: null };
+export const NEW_STATE: State = { fails: 0, since: null, why: null, alerted: false, certFails: 0, certProblem: null, blockedFails: 0, blocked: null, outages: [], days: {}, hours: {}, ms: null, flapping: null, regional: null };
 
 export function stateOf(saved: string | null): State {
 	try {
@@ -186,7 +188,7 @@ export function stateOf(saved: string | null): State {
 }
 
 export type Event =
-	| { kind: "down"; why: string; since: string }
+	| { kind: "down"; why: string; since: string; confirmed?: string[] }
 	| { kind: "up"; outage: Outage }
 	| { kind: "cert"; why: string }
 	| { kind: "flapping"; outages: number }
@@ -255,6 +257,7 @@ export function step(s: State, o: Outcome, now: Date, ms: number | null = null):
 		if (!last || Date.parse(last.to) <= now.getTime() - FLAP_QUIET_MS) next.flapping = null;
 	}
 	next.fails = 0;
+	next.regional = null;
 	next.since = null;
 	next.why = null;
 	next.alerted = false;
@@ -594,6 +597,22 @@ const ADVICE: Record<Kind, string> = {
 };
 
 /** The alert for one event, in plain words. `tz` is the time zone from Settings. */
+const listOf = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
+
+/** Where a failure was confirmed, or why it wasn't: after the "down" step, with what other regions saw. Only us failing
+ *  holds the alert back and notes which regions can reach it; any region agreeing lets the alert go, naming them. */
+export function weighOpinions(next: State, events: Event[], views: { region: string; state: string }[] | null, now: Date): { next: State; events: Event[] } {
+	const down = events.find((e) => e.kind === "down") as Extract<Event, { kind: "down" }> | undefined;
+	if (!down || !views?.length) return { next: { ...next, regional: null }, events };
+	const agree = views.filter((v) => v.state === "down").map((v) => v.region);
+	if (agree.length) return { next: { ...next, regional: null }, events: events.map((e) => (e === down ? { ...down, confirmed: agree } : e)) };
+	return { next: { ...next, alerted: false, regional: { at: iso(now), ok: views.map((v) => v.region) } }, events: events.filter((e) => e !== down) };
+}
+
+/** While only we see it failing, other regions are asked again at most this often. */
+export const REGIONAL_RECHECK_MS = 10 * 60_000;
+export const askAgain = (s: State, now: Date) => !s.regional || now.getTime() - Date.parse(s.regional.at) >= REGIONAL_RECHECK_MS;
+
 export function alertFor(m: MonitorLike & { every: number }, e: Event, tz: string, link: string, app = "Site Watch"): Alert {
 	return { ...alertText(m, e, tz, link, app), type: EVENT_TYPE[e.kind] };
 }
@@ -610,7 +629,7 @@ function alertText(m: MonitorLike & { every: number }, e: Event, tz: string, lin
 				urgent: true,
 				text: [
 					m.kind === "heartbeat" ? `We haven't heard from ${what} since about ${timeIn(e.since, tz)}: ${e.why}.`
-						: `${what} stopped working at about ${timeIn(e.since, tz)}: ${e.why}. We tried twice, ${apart}, before telling you.`,
+						: `${what} stopped working at about ${timeIn(e.since, tz)}: ${e.why}. We tried twice, ${apart}${e.confirmed?.length ? `, and our checks from ${listOf(e.confirmed)} found the same,` : ""} before telling you.`,
 					"We'll keep checking and tell you once more when it's back. There won't be more alerts about this outage until then.",
 					ADVICE[m.kind], end,
 				].join("\n\n"),

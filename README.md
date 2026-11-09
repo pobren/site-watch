@@ -202,6 +202,10 @@ On its own, Site Watch checks about 40 things a minute, which is plenty for one 
 
 Make the queue first with `npx wrangler queues create site-watch-checks`. The Admin tab says when checks are running through it.
 
+## Second opinions from other regions
+
+Checks run from Cloudflare's network, wherever your Worker happens to run. When something fails twice in a row, small helpers in other regions (west Europe and east US, or Asia Pacific when one can't answer) try it too, and the "down" alert only goes if at least one of them agrees. If they can all reach it, the dashboard says it's only failing from the main check and no alert is sent. The helpers are Durable Objects pinned to their region (`PROBES` in `wrangler.jsonc`) and only work while something is failing. Remove the `durable_objects` and `migrations` blocks to check from one place only.
+
 ## Your own home page and brand
 
 Add a folder of static files to the Worker and people who aren't signed in see its `index.html` at `/`, with sign-in at `/signin` and sign-up at `/signup`. Other files (pricing, terms, privacy, icons) are served as they are. The Worker needs to run first, so it can tell who's signed in:

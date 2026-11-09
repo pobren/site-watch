@@ -36,6 +36,8 @@ export interface Env extends WhiteLabelEnv, ApnsEnv, PhoneEnv {
 	CF_API_TOKEN?: string;
 	/** What customers point their CNAME at, such as domains.example.com (the zone's fallback origin). */
 	DOMAIN_TARGET?: string;
+	/** Optional helpers in other regions that confirm a failure before a "down" alert goes (probe.ts). */
+	PROBES?: DurableObjectNamespace;
 }
 
 /** One queue message: monitors to check now, or websites due their daily certificate and renewal look. */

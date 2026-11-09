@@ -1,5 +1,12 @@
 # Changes
 
+## 1.9.0: Failures confirmed from other regions
+
+- **Before a "down" alert goes**, helpers in two other Cloudflare regions (west Europe and east US, with Asia Pacific if one can't answer) try the same website, mail server or port.
+- **The alert only goes if at least one agrees.** It says where: "our checks from west Europe found the same".
+- **If they can all reach it**, no alert is sent. The dashboard notes that it's only failing from the main check, and the other regions are asked again every 10 minutes.
+- The helpers are Durable Objects (the PROBES binding in wrangler.jsonc). They only run when something is failing, so they cost next to nothing. Without the binding, alerts work as before.
+
 ## 1.8.0: Checks every 30 seconds
 
 - **Every 30 seconds** is a new choice for websites, mail servers and ports. The minute's run checks them, and a queue message held back half a minute checks them again. Without a queue (CHECKS) they're checked every minute.

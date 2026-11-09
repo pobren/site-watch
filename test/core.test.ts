@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
 import { test } from "node:test";
 import {
-	alertFor, certAlert, CHECK_EVERY, FAST_EVERY, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
-	pageOutcome, payloadFor, rawEmail, rdapExpiry, reminderDue, remindersPassed, renewalAlert, step, statusOf, uptime, verifyStripe, webhookHeaders, type MailIo, type State,
+	askAgain, weighOpinions, alertFor, certAlert, CHECK_EVERY, FAST_EVERY, certFromCt, cleanChannel, cleanHost, cleanPort, cleanRules, cleanUrl, dailyBars, domainOf, heartbeatOutcome, mailDialog, markSent, NEW_STATE, overall,
+	pageOutcome, payloadFor, rawEmail, rdapExpiry, reminderDue, remindersPassed, renewalAlert, step, stateOf, statusOf, uptime, verifyStripe, webhookHeaders, type MailIo, type State,
 } from "../src/core.ts";
 
 const at = (s: string) => new Date(s);
@@ -199,4 +199,38 @@ test("webhook signature checks out the same way as Mail App's", async () => {
 	assert.equal(parts.t, "1760520601");
 	assert.equal(parts.v1, createHmac("sha256", "whsec_test").update(`${parts.t}.${body}`).digest("hex"));
 	assert.equal(h["x-sitewatch-signature"], `sha256=${parts.v1}`);
+});
+
+test("other regions: agreeing lets the alert go and names them", () => {
+	const now = new Date("2026-11-09T21:00:00Z");
+	let s = stateOf(null);
+	s = step(s, { state: "down", why: "no answer" }, now).next;
+	const r = step(s, { state: "down", why: "no answer" }, now);
+	const w = weighOpinions(r.next, r.events, [{ region: "west Europe", state: "down" }, { region: "east US", state: "up" }], now);
+	const down = w.events.find((e) => e.kind === "down");
+	assert.deepEqual(down && "confirmed" in down ? down.confirmed : null, ["west Europe"]);
+	assert.equal(w.next.alerted, true);
+	assert.equal(w.next.regional, null);
+});
+
+test("other regions: only us failing holds the alert back", () => {
+	const now = new Date("2026-11-09T21:00:00Z");
+	let s = stateOf(null);
+	s = step(s, { state: "down", why: "no answer" }, now).next;
+	const r = step(s, { state: "down", why: "no answer" }, now);
+	const w = weighOpinions(r.next, r.events, [{ region: "west Europe", state: "up" }, { region: "east US", state: "up" }], now);
+	assert.equal(w.events.some((e) => e.kind === "down"), false);
+	assert.equal(w.next.alerted, false);
+	assert.deepEqual(w.next.regional?.ok, ["west Europe", "east US"]);
+	assert.equal(askAgain(w.next, new Date(now.getTime() + 5 * 60_000)), false);
+	assert.equal(askAgain(w.next, new Date(now.getTime() + 10 * 60_000)), true);
+	// Back up: the note goes.
+	assert.equal(step(w.next, { state: "up" }, now).next.regional, null);
+});
+
+test("other regions: no helpers means the alert goes as before", () => {
+	const now = new Date("2026-11-09T21:00:00Z");
+	let s = step(stateOf(null), { state: "down", why: "x" }, now).next;
+	const r = step(s, { state: "down", why: "x" }, now);
+	assert.equal(weighOpinions(r.next, r.events, null, now).events.some((e) => e.kind === "down"), true);
 });

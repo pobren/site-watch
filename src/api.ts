@@ -1,6 +1,7 @@
 // The JSON the app page uses. Everything here needs someone signed in, apart from set-up, sign-in and sign-up.
 // Each account sees only its own things; the owner also gets the Admin routes (branding, plans, clients).
 
+import { REGIONS } from "./probe.ts";
 import { appTo, deliver, newSecret, planAllows, postTo, pushTo, sendEmail } from "./alerts.ts";
 import { apnsReady } from "./apns.ts";
 import { deleteAccount, handleApps, listApps } from "./apps.ts";
@@ -38,6 +39,8 @@ export function shape(r: MonitorRow, origin: string, now = new Date()) {
 		every: r.every < 1 ? 1 : r.every, fast: r.every < 1, extras: r.extras === 1,
 		status: statusOf(s, !!r.checked_at, paused), why: s.blocked ?? s.why ?? s.certProblem, since: isDown(s) ? s.since : null, ms: s.ms,
 		uptime30: uptime(s, now, 30), uptime90: uptime(s, now, 90), bars: dailyBars(s, now).map((b) => b.up), responses: responseTimes(s),
+		// Failing only from our own check: the regions that could still reach it (probe.ts).
+		regional: s.regional && isDown(s) ? s.regional.ok : null,
 		outages: s.outages.slice(-10).reverse(), checkedAt: r.checked_at, pausedUntil: paused ? r.paused_until : null,
 		pingUrl: r.kind === "heartbeat" && r.token ? `${origin}/hb/${r.token}` : null, lastPing: r.last_ping,
 		cert: cert ? { ...cert, daysLeft: daysLeft(cert.expires, now) } : null,
@@ -94,6 +97,8 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		notices: notices.results,
 		alerts: alerts.results,
 		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
+		// Regions that confirm a failure before a "down" alert, when this install has them (probe.ts).
+		regions: env.PROBES ? REGIONS.map((r) => r.name) : [],
 		choices: { every: everyChoices(limits).filter((n) => n >= 1), fast: limits.fast, heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS },
 		limits,
 		brand: inst.brand,

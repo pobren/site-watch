@@ -473,7 +473,7 @@ function overview() {
 			h("span", { class: "big" }, icon(down ? "alert" : probs ? "alert" : "check", 30)),
 			h("div", null, h("h1", null, down ? down + " down right now" : probs ? "Something needs a look" : "Everything's working"),
 				h("p", null, down ? "We keep checking and will tell you the moment it's back." : (last ? "Last checked " + ago(last) + "." : "Your first checks are on their way.")))),
-		h("p", { class: "lead" }, "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row."),
+		h("p", { class: "lead" }, state.regions && state.regions.length ? "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row, confirmed from another region (" + state.regions.join(", ") + ")." : "Checked from Cloudflare's network. Something only counts as down after two failed checks in a row."),
 		h("div", { class: "stats" }, h("div", { class: "stat" }, h("b", { class: "t-up" }, count((x) => x.status === "up")), h("span", null, "Working")), h("div", { class: "stat" }, h("b", { class: "t-down" }, down), h("span", null, "Down")), h("div", { class: "stat" }, h("b", { class: "t-unsure" }, probs), h("span", null, "Need a look")), h("div", { class: "stat" }, h("b", null, m.length), h("span", null, "Watching"))),
 		lic && lic.websites > lic.limit ? h("div", { class: "note" }, "You're watching " + lic.websites + " websites. The free licence covers one person or organisation's own websites, up to " + lic.limit + ". For more, ", h("a", { href: "https://paulobrien.dev/contact/", target: "_blank", rel: "noopener" }, "ask about a commercial licence"), ".") : null,
 		m.map(monitorCard));
@@ -496,6 +496,7 @@ function monitorCard(x) {
 				h("div", { class: "title" }, x.label, h("span", { class: "kind" }, KIND[x.kind])),
 				x.name || x.kind !== "website" ? h("div", { class: "sub" }, sub) : null,
 				h("div", { class: "why t-" + x.status }, WORDS[x.status], x.why && x.status !== "up" ? ": " + x.why : "", x.since ? " (since " + when(x.since) + ")" : "", x.pausedUntil ? " until " + when(x.pausedUntil) : ""),
+				x.regional ? h("div", { class: "hint" }, "Only failing from our main check. Our checks from " + x.regional.join(" and ") + " can reach it, so we haven't sent an alert. We'll ask them again every 10 minutes.") : null,
 				h("div", { class: "facts" }, facts)),
 			h("div", { class: "acts" }, btn(isOpen ? "Less" : "More", "chev", () => { isOpen ? open.delete(x.id) : open.add(x.id); draw(); }, "small"))),
 		bars(x.bars),

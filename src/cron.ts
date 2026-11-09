@@ -6,9 +6,10 @@
 import { deliver } from "./alerts.ts";
 import { checkMail, checkPort, checkWebsite, lookupCert, lookupRegistration, type Result } from "./checks.ts";
 import {
-	alertFor, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, stateOf, step,
+	alertFor, askAgain, certAlert, certStale, certSteps, heartbeatOutcome, iso, markSent, reminderDue, remindersPassed, renewalAlert, RENEWAL_DAYS, rulesOf, stateOf, step, weighOpinions,
 	type Cert, type Registration,
 } from "./core.ts";
+import { secondOpinions } from "./probe.ts";
 import { accountById, ensureSchema, install, LIVE_SQL, type AccountRow, type CheckBatch, type Env, type MonitorRow } from "./db.ts";
 
 /** Checks per run, and how many at once (Workers allow six open connections; the free plan 50 requests a run). */
@@ -53,7 +54,13 @@ export async function checkOne(env: Env, row: MonitorRow, account: AccountRow, n
 		return;
 	}
 	const before = stateOf(row.state);
-	const { next, events } = step(before, outcome, now, ms);
+	let { next, events } = step(before, outcome, now, ms);
+	// About to say it's down: other regions try it first (probe.ts). While only we can't reach it, they're asked
+	// again every 10 minutes and the alert waits.
+	if (events.some((e) => e.kind === "down") && env.PROBES && row.kind !== "heartbeat") {
+		if (askAgain(before, now)) ({ next, events } = weighOpinions(next, events, await secondOpinions(env, row, ctx.helloName).catch(() => null), now));
+		else ({ next, events } = { next: { ...next, alerted: false, regional: before.regional }, events: events.filter((e) => e.kind !== "down") });
+	}
 	await env.DB.prepare("UPDATE monitors SET state = ?, checked_at = ? WHERE id = ?").bind(JSON.stringify(next), iso(now), row.id).run();
 	if (opts.quiet) return;
 	for (const e of events) await deliver(env, account, alertFor({ ...row }, e, account.tz, ctx.link, ctx.app), row.id, now);
