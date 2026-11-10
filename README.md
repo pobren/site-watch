@@ -177,7 +177,7 @@ Members can also choose to get the alert emails. Plans set the logins included (
 2. In Cloudflare, open **Workers & Pages › site-watch › Settings › Variables and Secrets** and add two secrets: `STRIPE_SECRET_KEY` (your secret key) and `STRIPE_WEBHOOK_SECRET` (from step 3).
 3. In Stripe, add a webhook endpoint at `https://<your Site Watch address>/stripe/webhook` for `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Copy its signing secret into step 2.
 4. In Site Watch, open **Admin**, add your plans with their Stripe price IDs, and tick **Open sign-up to clients**. Your sign-up page is `/signup`.
-5. In Stripe's settings, switch on the customer portal and email receipts.
+5. In Stripe's settings, switch on the customer portal (it's used for changing cards) and email receipts, and add your logo and colour under Branding so receipts carry them.
 
 **Let Stripe handle tax (optional).** With [Stripe Managed Payments](https://docs.stripe.com/payments/managed-payments), Stripe sells your plans as merchant of record: it works out, collects and pays sales tax and VAT around the world and handles fraud and disputes, for an extra fee on each payment. Switch it on in Stripe, give each product a tax code labelled *Eligible for Managed Payments*, then add a variable `STRIPE_MANAGED_PAYMENTS` set to `on` to the Worker. Only new subscriptions use it.
 

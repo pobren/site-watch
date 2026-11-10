@@ -1,7 +1,7 @@
 // Sell to clients (off until the owner switches it on): clients sign up on /signup, pick one of the owner's plans
 // and pay by Stripe Checkout with the owner's own Stripe account. Stripe tells us by webhook when a subscription
 // starts, changes or ends, and a client's checks only run while it's paid. Cards, receipts, invoices, refunds and
-// cancelling are all Stripe's: clients manage theirs in Stripe's billing portal from their Account tab.
+// cancelling are all Stripe's: clients see their plan, receipts and card on their Account tab (money.ts).
 //
 // Secrets on the Worker: STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET. The webhook address is /stripe/webhook.
 // Optional variable STRIPE_MANAGED_PAYMENTS = "on": Stripe sells as merchant of record (Stripe Managed Payments).
@@ -10,7 +10,7 @@ import { appTo, sendEmail } from "./alerts.ts";
 import { json } from "./api-auth.ts";
 import { hashPassword, passwordProblem, sessionCookie } from "./auth.ts";
 import { cleanEmail, cleanName, iso, verifyStripe } from "./core.ts";
-import { getMeta, install, newId, type AccountRow, type Env, type PlanRow } from "./db.ts";
+import { getMeta, install, logEvent, newId, type AccountRow, type Env, type PlanRow } from "./db.ts";
 import { phonePacks, TOPUP_DAYS } from "./phones.ts";
 import { ROBOT_ERROR, turnstileOk } from "./turnstile.ts";
 
@@ -22,7 +22,7 @@ export const sellingOn = async (env: Env) => (await install(env.DB)).sell;
 export const paymentsOn = async (env: Env) => !!env.STRIPE_SECRET_KEY && (await install(env.DB)).sell;
 
 /** Stripe's API takes form fields, with nested ones as a[b][c]. */
-function form(params: Record<string, unknown>, prefix = ""): string[] {
+export function form(params: Record<string, unknown>, prefix = ""): string[] {
 	const out: string[] = [];
 	for (const [k, v] of Object.entries(params)) {
 		if (v === undefined || v === null) continue;
@@ -158,6 +158,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 				.bind(a.id, a.email, a.name, a.password, a.plan, a.status, a.alert_to, a.tz, a.verify_token, a.created_at),
 			db.prepare("INSERT INTO signups (ip_hash, at) VALUES (?, ?)").bind(ipHash, a.created_at),
 		]);
+		await logEvent(db, a.id, "signup", `Signed up for ${plan.name}`);
 		const cookie = { "set-cookie": await sessionCookie(db, a, url.protocol === "https:") };
 		if (plan.free === 1) {
 			if (a.verify_token) await sendVerify(env, a, url.origin);
@@ -215,7 +216,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 		const b = await request.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
 		const plan = (await livePlans(db)).find((p) => p.id === (b.plan ?? me.plan));
 		if (!plan) return json({ error: "Please choose a plan." }, 400);
-		if (me.status === "active" || me.status === "trialing") return json({ error: "Your plan is already paid. Use Manage billing to change it." }, 409);
+		if (me.status === "active" || me.status === "trialing") return json({ error: "Your plan is already paid. Use Change plan on your Account tab instead." }, 409);
 		if (plan.free === 1) return json({ error: "That plan is free: there's nothing to pay." }, 400);
 		try {
 			return json({ checkout: await checkout(env, me, plan, url.origin, b.yearly === true) });
@@ -235,7 +236,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 	return null;
 }
 
-interface Sub { id: string; customer: string; status: string; current_period_end?: number; metadata?: Record<string, string>; items?: { data?: { price?: { id?: string }; current_period_end?: number }[] } }
+export interface Sub { id: string; customer: string; status: string; current_period_end?: number; metadata?: Record<string, string>; items?: { data?: { price?: { id?: string }; current_period_end?: number }[] } }
 
 async function webhook(request: Request, env: Env): Promise<Response> {
 	const body = await request.text();
@@ -269,7 +270,7 @@ async function webhook(request: Request, env: Env): Promise<Response> {
 /** Stripe's statuses that mean the subscription has ended for good. */
 const ENDED = ["canceled", "incomplete_expired", "unpaid"];
 
-async function saveSub(env: Env, account: string, sub: Sub): Promise<void> {
+export async function saveSub(env: Env, account: string, sub: Sub): Promise<void> {
 	const db = env.DB;
 	const before = await db.prepare("SELECT status, plan FROM accounts WHERE id = ?").bind(account).first<{ status: string; plan: string | null }>();
 	// The plan is whichever item is a plan's price: extra team logins (team.ts) are a second item on the same subscription.
@@ -284,6 +285,7 @@ async function saveSub(env: Env, account: string, sub: Sub): Promise<void> {
 	if (free) {
 		await db.prepare("UPDATE accounts SET stripe_customer = ?, stripe_sub = NULL, status = 'free', plan = ?, period_end = NULL WHERE id = ? AND role = 'client'").bind(sub.customer, free.id, account).run();
 		await fitToPlan(db, account, free);
+		if (before?.status !== "free") await logEvent(db, account, "plan", `Subscription ended, moved to ${free.name}`);
 		return;
 	}
 	// Newer Stripe versions (such as a new webhook endpoint's) keep the period end on the subscription item.
@@ -293,6 +295,22 @@ async function saveSub(env: Env, account: string, sub: Sub): Promise<void> {
 	// Moving up from a smaller plan: things paused to fit it carry on.
 	if (sub.status === "active" || sub.status === "trialing") await db.prepare("UPDATE monitors SET paused_until = NULL WHERE account_id = ? AND paused_until = '9999-12-31T00:00:00Z'").bind(account).run();
 	await welcomeToPlan(env, account, before, sub.status);
+	await historyOf(db, account, before, sub.status);
+}
+
+const STATUS_WORDS: Record<string, string> = { active: "paid", trialing: "on a trial", past_due: "payment overdue", incomplete: "waiting for the first payment", canceled: "cancelled", unpaid: "unpaid", paused: "paused" };
+
+/** Notes a plan or status change in the client's billing history (money.ts). Stripe sends several events for one
+ *  change; only the first sees a difference, so each change is noted once. */
+async function historyOf(db: D1Database, account: string, before: { status: string; plan: string | null } | null, status: string): Promise<void> {
+	const now = await db.prepare("SELECT a.plan, p.name FROM accounts a LEFT JOIN plans p ON p.id = a.plan WHERE a.id = ?").bind(account).first<{ plan: string | null; name: string | null }>();
+	if (!now) return;
+	if (before && before.plan !== now.plan && PAID.includes(status) && PAID.includes(before.status)) {
+		const old = before.plan ? await db.prepare("SELECT name FROM plans WHERE id = ?").bind(before.plan).first<{ name: string }>() : null;
+		await logEvent(db, account, "plan", `Moved from ${old?.name ?? "another plan"} to ${now.name ?? "a plan"}`);
+	} else if (!before || before.status !== status) {
+		await logEvent(db, account, "status", `${now.name ?? "Plan"}: ${STATUS_WORDS[status] ?? status.replace("_", " ")}`);
+	}
 }
 
 const PAID = ["active", "trialing"];

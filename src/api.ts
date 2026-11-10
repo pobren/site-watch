@@ -11,13 +11,14 @@ import { apnsReady } from "./apns.ts";
 import { deleteAccount, handleApps, listApps } from "./apps.ts";
 import { handleAuth, json } from "./api-auth.ts";
 import { currentAccount, hashPassword } from "./auth.ts";
+import { handleMoney } from "./money.ts";
 import { handleBilling, livePlans, publicPlan, signupCap } from "./billing.ts";
 import { checkOne, contextOf, dailyOne } from "./cron.ts";
 import {
 	CHANNEL_NAMES, cleanApiRules, cleanDnsRules, DNS_TYPES, API_METHODS, type ApiRules, CHECK_EVERY, FAST_EVERY, cleanChannel, cleanEmail, cleanHost, cleanName, cleanPort, cleanRules, cleanSlug, cleanUrl, dailyBars, DEFAULT_EVERY, HEARTBEAT_EVERY, iso,
 	HELPER_REGIONS, isDown, labelOf, LICENCE_SITES, mailPort, MAIL_PORTS, maskUrl, responseTimes, rulesOf, speedLogOf, speedSummary, stateOf, uptimeCsv, statusOf, uptime, daysLeft, type Kind,
 } from "./core.ts";
-import { DEFAULT_BRAND, hasPro, install, isLive, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
+import { DEFAULT_BRAND, hasPro, install, isLive, logEvent, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { cleanSub, vapidKeys } from "./push.ts";
 import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
@@ -240,6 +241,8 @@ export async function handleApi(request: Request, env: Env, path: string, url: U
 	const billing = await handleBilling(request, env, path, url, me);
 	if (billing) return billing;
 	if (!me) return bad("Please sign in.", 401);
+	const money = await handleMoney(request, env, path, url, me);
+	if (money) return money;
 
 	const inst = await install(db);
 	if (me.role === "owner" && !me.member && inst.origin !== url.origin) await setMeta(db, "origin", url.origin);
@@ -796,7 +799,11 @@ async function admin(request: Request, env: Env, path: string, b: Record<string,
 			return reply();
 		}
 		// Free of charge (no Stripe), or held. Stripe's next webhook for them wins again.
-		if ("status" in b) await db.prepare("UPDATE accounts SET status = ? WHERE id = ?").bind(b.status === "active" ? "active" : b.status === "free" ? "free" : "none", cl[1]).run();
+		if ("status" in b) {
+			const status = b.status === "active" ? "active" : b.status === "free" ? "free" : "none";
+			await db.prepare("UPDATE accounts SET status = ? WHERE id = ?").bind(status, cl[1]).run();
+			await logEvent(db, cl[1], "status", status === "none" ? "Held by you" : "Made active free of charge by you");
+		}
 		if ("plan" in b && typeof b.plan === "string") await db.prepare("UPDATE accounts SET plan = (SELECT id FROM plans WHERE id = ?) WHERE id = ?").bind(b.plan, cl[1]).run();
 		return reply();
 	}
