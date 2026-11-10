@@ -871,7 +871,7 @@ function account() {
 	const cur = h("input", { type: "password", autocomplete: "current-password" });
 	const next = h("input", { type: "password", autocomplete: "new-password" });
 	return h("div", null, h("h1", null, "Account"), h("p", { class: "lead" }, "Signed in as " + me.email + "."),
-		me.role === "client" ? planCard(me) : null,
+		me.role === "client" ? (me.hasBilling && (me.status === "active" || me.status === "trialing" || me.status === "past_due") ? billingCards(me) : planCard(me)) : null,
 		teamCard(),
 		h("div", { class: "card" }, h("h2", null, "Your details"), field("Name", name),
 			state.extras && state.extras.reports ? h("label", { class: "check" }, reports, "Email me an uptime report on the first of each month") : null,
@@ -951,6 +951,60 @@ function planCard(me) {
 		h("p", { class: "hint" }, "Cards, receipts, changing plan and cancelling are handled securely by Stripe."));
 }
 
+// A paying client's billing (money.ts): plan, changing or cancelling it, card and receipts, read from Stripe when
+// the Account tab opens. Card details are only ever typed on Stripe's own page.
+let bill = null, billLoading = false, switchTo = null;
+const longDate = (iso) => new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+function loadBill(force) {
+	if (billLoading || (bill && !force)) return;
+	billLoading = true;
+	api("/api/billing/summary").then((r) => { bill = r; }).catch((e) => { bill = { error: e.message }; }).finally(() => { billLoading = false; draw(); });
+}
+function billingCards(me) {
+	loadBill();
+	if (!bill) return h("div", { class: "card" }, h("h2", null, icon("card"), " Your plan and billing"), h("p", { class: "hint" }, "Getting your plan and receipts from Stripe…"));
+	if (bill.error || !bill.billing) return h("div", null, planCard(me), bill.error ? msg("err", bill.error) : null);
+	const plans = (state.plans || []).filter((p) => !p.free);
+	const statusWords = { active: "Paid", trialing: "On a trial", past_due: "Payment overdue: please update your card", incomplete: "Waiting for payment" };
+	const choose = (p, yearly) => (e) => act(e.currentTarget, async () => { switchTo = { plan: p, yearly, preview: null }; switchTo.preview = await api("/api/billing/preview", { plan: p.id, yearly }); });
+	const options = [];
+	for (const p of plans) for (const yearly of [false, true]) {
+		if (yearly && !p.priceYear) continue;
+		if (bill.plan && p.id === bill.plan.id && yearly === bill.yearly) continue;
+		options.push(h("div", { class: "row", style: "justify-content:space-between;border-top:1px solid var(--line);padding:10px 0" },
+			h("div", null, h("b", null, p.name + (yearly ? " yearly" : " monthly")), h("div", { class: "hint" }, yearly ? p.priceYear : p.price)),
+			btn(bill.plan && plans.findIndex((x) => x.id === p.id) > plans.findIndex((x) => x.id === bill.plan.id) ? "Upgrade" : "Switch", bill.plan && plans.findIndex((x) => x.id === p.id) > plans.findIndex((x) => x.id === bill.plan.id) ? "up" : "refresh", choose(p, yearly), "small")));
+	}
+	const sw = switchTo && switchTo.preview ? h("div", { class: "note" },
+		h("h3", null, "Move to " + switchTo.plan.name + (switchTo.yearly ? " yearly" : " monthly")),
+		h("p", null, switchTo.preview.credit ? "Nothing to pay today: what's left of your current plan covers it, and the rest is taken off your next bill." : h("span", null, "You'll pay ", h("b", null, switchTo.preview.today), " today for the rest of this period."), switchTo.preview.then ? " Then " + switchTo.preview.then + "." : ""),
+		h("p", { class: "hint" }, "Your card on file is charged now. If it's declined, nothing changes."),
+		h("div", { class: "btns" }, btn("Confirm and pay", "lock", (e) => act(e.currentTarget, async () => { const r = await api("/api/billing/change", { plan: switchTo.plan.id, yearly: switchTo.yearly }); switchTo = null; bill = null; return api("/api/state"); }, "You're now on the new plan"), "main"), btn("Cancel", "x", () => { switchTo = null; draw(); }))) : null;
+	return h("div", null,
+		h("div", { class: "card" }, h("h2", null, icon("card"), " Your plan"),
+			h("p", null, h("b", null, bill.plan ? bill.plan.name : "Your plan"), " · ", bill.yearly ? "yearly" : "monthly", bill.price ? " · " + bill.price + (bill.yearly ? " a year" : " a month") : ""),
+			h("p", { class: bill.status === "past_due" ? "t-down" : "t-up", style: "font-weight:700;margin:0" }, statusWords[bill.status] || bill.status || ""),
+			bill.renews ? h("p", { class: bill.ending ? "t-unsure" : "hint", style: bill.ending ? "font-weight:700" : "" }, bill.ending ? "Ends on " + longDate(bill.renews) + ". You keep everything until then." : "Renews on " + longDate(bill.renews) + ".") : null,
+			bill.extraLogins && bill.extraLogins.count ? h("p", { class: "hint" }, bill.extraLogins.count + " extra login" + (bill.extraLogins.count === 1 ? "" : "s") + (bill.extraLogins.each ? " at " + bill.extraLogins.each + " each" : "") + ". Add or remove people on the Team card.") : null,
+			state.plans ? h("p", { class: "hint" }, planLine((state.plans || []).find((p) => bill.plan && p.id === bill.plan.id) || {})) : null,
+			h("div", { class: "btns" },
+				bill.ending ? btn("Keep my plan", "check", (e) => act(e.currentTarget, async () => { await api("/api/billing/resume", {}); bill = null; }, "Your plan carries on"), "main")
+					: btn("Cancel my plan", "x", (e) => { if (confirm("Cancel your plan? It stays on until " + (bill.renews ? longDate(bill.renews) : "the end of the period you've paid for") + ", then your account moves to the free plan.")) act(e.currentTarget, async () => { await api("/api/billing/cancel", {}); bill = null; }, "Your plan will end at the end of this period"); }, "danger"))),
+		options.length && !bill.ending ? h("div", { class: "card" }, h("h2", null, icon("up"), " Change plan"),
+			h("p", { class: "hint" }, "Move up or down, or between monthly and yearly. You'll see the cost before anything is charged."),
+			sw || options) : null,
+		h("div", { class: "card" }, h("h2", null, icon("lock"), " Payment card"),
+			bill.card ? h("p", null, h("b", null, bill.card.brand.charAt(0).toUpperCase() + bill.card.brand.slice(1) + " ending " + bill.card.last4), h("span", { class: "hint" }, " · expires " + bill.card.expires)) : h("p", { class: "hint" }, "No card saved."),
+			h("div", { class: "btns" }, btn(bill.card ? "Change card" : "Add a card", "card", (e) => act(e.currentTarget, async () => { const r = await api("/api/billing/card", {}); location.href = r.go; }), "main")),
+			h("p", { class: "hint" }, "You'll type your card on Stripe's secure page, then come straight back. We never see your card number."), payStrip()),
+		h("div", { class: "card" }, h("h2", null, icon("page"), " Receipts"),
+			bill.receipts.length ? bill.receipts.map((r) => h("div", { class: "row", style: "justify-content:space-between;border-top:1px solid var(--line);padding:10px 0" },
+				h("div", { style: "min-width:0;flex:1 1 220px" }, h("b", null, longDate(r.date) + " · " + r.amount), " ", h("span", { class: r.refunded || r.status !== "paid" ? "t-unsure" : "t-up", style: "font-weight:700" }, r.refunded || (r.status === "paid" ? "Paid" : r.status === "open" ? "Not paid yet" : r.status)),
+					h("div", { class: "hint" }, (r.what || "Your plan") + (r.number ? " · No. " + r.number : ""))),
+				h("div", { class: "btns", style: "margin:0" }, r.pdf ? h("a", { class: "btn small", href: r.pdf, target: "_blank", rel: "noopener" }, icon("down"), "PDF") : null, r.link ? h("a", { class: "btn small", href: r.link, target: "_blank", rel: "noopener" }, icon("open"), "View") : null)))
+				: h("p", { class: "hint" }, "No receipts yet.")));
+}
+
 // API keys and the AI connector. A new key is shown once, straight after it's made.
 let newKey = null;
 function apiCard() {
@@ -1000,6 +1054,7 @@ function admin() {
 		fast: h("input", { inputmode: "numeric", value: pl && pl.fast ? pl.fast : "", placeholder: "None" }),
 		channels: h("select", null, [["all", "Every channel"], ["push", "Email and browser alerts"], ["email", "Email only"]].map(([v, l]) => h("option", { value: v, selected: (pl ? pl.channels : "all") === v }, l))) };
 	const cap = h("input", { inputmode: "numeric", value: a.signupCap });
+	if (editing && editing.client) return h("div", null, h("h1", null, "Admin"), h("p", { class: "lead" }, "A client's plan, payments and history."), adminClient(editing.client));
 	return h("div", null, h("h1", null, "Admin"), h("p", { class: "lead" }, "Settings for this whole install."),
 		h("div", { class: "card" }, h("h2", null, "Sending email"),
 			!a.emailBinding ? msg("err", "The EMAIL binding is missing from the Worker, so no email can be sent. See the README.") : null,
@@ -1033,10 +1088,53 @@ function admin() {
 		h("div", { class: "card" }, h("h2", null, "Clients"), a.clients.length ? h("table", null, h("tr", null, h("th", null, "Client"), h("th", null, "Plan"), h("th", null, "")), a.clients.map((c) => h("tr", null,
 			h("td", null, h("b", null, c.name || c.email), h("div", { class: "hint" }, c.email + " · joined " + when(c.created_at) + " · watching " + c.monitors)),
 			h("td", null, ((a.plans.find((p) => p.id === c.plan) || {}).name || "None"), h("div", { class: ["active", "trialing", "free"].includes(c.status) ? "t-up" : "t-unsure" }, c.status === "none" ? "not paid" : c.status === "unverified" ? "email not confirmed" : c.status.replace("_", " "))),
-			h("td", null, h("div", { class: "btns", style: "margin:0" }, ["active", "trialing", "free"].includes(c.status) ? btn("Hold", "pause", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "none" })), "small") : btn("Make active free", "play", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "active" })), "small"),
+			h("td", null, h("div", { class: "btns", style: "margin:0" }, btn("Billing", "card", () => { editing = { client: c.id }; clientBill = null; draw(); window.scrollTo(0, 0); }, "small"), ["active", "trialing", "free"].includes(c.status) ? btn("Hold", "pause", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "none" })), "small") : btn("Make active free", "play", (e) => act(e.currentTarget, () => api("/api/admin/clients/" + c.id, { status: "active" })), "small"),
 				btn("Delete", "trash", (e) => { if (confirm("Delete " + c.email + " and everything they watch? Cancel their subscription in Stripe too.")) act(e.currentTarget, () => api("/api/admin/clients/" + c.id, undefined, "DELETE")); }, "small danger")))))) : h("p", { class: "hint" }, "No clients yet.")),
 		h("div", { class: "card" }, h("h2", null, "Licence"), h("p", null, "Site Watch is free for one person or organisation's own websites, up to " + a.licence.limit + ". You're watching " + a.licence.websites + ". Going over that, running it for clients or offering it as a service needs a commercial licence."),
 			h("div", { class: "btns" }, h("a", { class: "btn", href: "https://paulobrien.dev/contact/", target: "_blank", rel: "noopener" }, icon("open"), "Ask about a commercial licence"))));
+}
+
+// Admin: one client's billing (money.ts): history, payments and refunds, read from Stripe when it opens.
+let clientBill = null, refunding = null, refundWarn = null;
+function adminClient(id) {
+	const back = btn("All clients", "users", () => { editing = null; clientBill = null; refunding = null; refundWarn = null; draw(); }, "small");
+	if (!clientBill || clientBill.id !== id) { clientBill = { id, loading: true }; api("/api/admin/clients/" + id + "/billing").then((r) => { clientBill = { id, ...r }; }).catch((e) => { clientBill = { id, error: e.message }; }).finally(draw); }
+	if (clientBill.loading) return h("div", { class: "card" }, h("h2", null, icon("card"), " Client billing"), h("p", { class: "hint" }, "Getting their payments from Stripe…"), h("div", { class: "btns" }, back));
+	if (clientBill.error) return h("div", { class: "card" }, h("h2", null, icon("card"), " Client billing"), msg("err", clientBill.error), h("div", { class: "btns" }, back));
+	const c = clientBill.client;
+	const reload = () => { clientBill = null; refunding = null; };
+	const refundForm = (p) => {
+		const amount = h("input", { inputmode: "decimal", placeholder: "All of it (" + p.left.toFixed(2) + ")" });
+		const note = h("input", { placeholder: "Optional, such as Didn't need it" });
+		const end = h("select", null, [["", "Leave their plan as it is"], ["period", "End their plan when the paid period does"], ["now", "End their plan now"]].map(([v, l]) => h("option", { value: v }, l)));
+		return h("div", { class: "note" }, h("h3", null, "Refund " + p.amount + " payment"),
+			h("div", { class: "two" }, field("Amount to refund", amount, "Leave empty to refund all that's left, or enter part, such as 2.50."), field("Reason", note, "Kept with the refund in Stripe and in their history.")),
+			field("Their plan", end),
+			h("div", { class: "btns" }, btn("Refund", "refresh", (e) => { const what = amount.value.trim() ? amount.value.trim() : "all " + p.left.toFixed(2); if (confirm("Refund " + what + " to " + (c.name || c.email) + "? This can't be undone.")) act(e.currentTarget, async () => { const r = await api("/api/admin/clients/" + id + "/refund", { payment: p.id, amount: amount.value.trim() || null, note: note.value, end: end.value || null }); reload(); refundWarn = r.warning || null; }, "Refund sent"); }, "danger"), btn("Cancel", "x", () => { refunding = null; draw(); })));
+	};
+	const KIND_ICON = { signup: "user", plan: "up", status: "tag", paid: "check", failed: "alert", refund: "refresh", cancel: "x", resume: "play" };
+	return h("div", null,
+		h("div", { class: "card" }, h("div", { class: "row", style: "justify-content:space-between" }, h("h2", { style: "margin:0" }, icon("user"), " " + (c.name || c.email)), back),
+			h("p", { class: "hint" }, c.email + " · joined " + longDate(c.joined)),
+			h("p", null, h("b", null, clientBill.plan || "No paid plan"), clientBill.plan ? " · " + (clientBill.yearly ? "yearly" : "monthly") : "", clientBill.subStatus ? " · " + clientBill.subStatus.replace("_", " ") : "", clientBill.ending ? " · ends at the end of this period" : ""),
+			clientBill.totals.length ? h("div", { class: "stats", style: "margin:12px 0 0" }, clientBill.totals.flatMap((t) => [h("div", { class: "stat" }, h("b", null, t.paid), h("span", null, "Paid")), h("div", { class: "stat" }, h("b", null, t.refunded), h("span", null, "Refunded")), h("div", { class: "stat" }, h("b", null, t.kept), h("span", null, "Kept"))])) : null,
+			c.stripeLink ? h("div", { class: "btns" }, h("a", { class: "btn small", href: c.stripeLink, target: "_blank", rel: "noopener" }, icon("open"), "Open in Stripe")) : null),
+		h("div", { class: "card" }, h("h2", null, icon("card"), " Payments"),
+			clientBill.stripeError ? msg("err", clientBill.stripeError) : null, refundWarn ? msg("err", refundWarn) : null,
+			clientBill.payments.length ? clientBill.payments.map((p) => h("div", { style: "border-top:1px solid var(--line);padding:10px 0" },
+				h("div", { class: "row", style: "justify-content:space-between" },
+					h("div", { style: "min-width:0;flex:1 1 220px" }, h("b", null, p.amount), " ", h("span", { class: p.status === "succeeded" ? (p.refunded ? "t-unsure" : "t-up") : "t-down", style: "font-weight:700" }, p.status === "succeeded" ? (p.refunded ? p.refunded + " refunded" : "Paid") : "Failed"),
+						h("div", { class: "hint" }, when(p.at) + (p.what ? " · " + p.what : "")),
+						p.failed ? h("div", { class: "t-down" }, p.failed) : null,
+						p.refunds.map((r) => h("div", { class: "hint" }, "Refunded " + r.amount + " on " + when(r.at) + (r.note ? " (" + r.note + ")" : "") + (r.status !== "succeeded" ? " · " + r.status : "")))),
+					h("div", { class: "btns", style: "margin:0" }, p.left > 0 && refunding !== p.id ? btn("Refund", "refresh", () => { refunding = p.id; draw(); }, "small") : null, p.receipt ? h("a", { class: "btn small", href: p.receipt, target: "_blank", rel: "noopener" }, icon("page"), "Receipt") : null)),
+				refunding === p.id ? refundForm(p) : null))
+				: h("p", { class: "hint" }, "No payments yet.")),
+		h("div", { class: "card" }, h("h2", null, icon("list"), " History"),
+			clientBill.history.length ? clientBill.history.map((e) => h("div", { style: "display:flex;gap:10px;align-items:flex-start;border-top:1px solid var(--line);padding:8px 0" },
+				h("span", { style: "flex:0 0 18px;margin-top:2px" }, icon(KIND_ICON[e.kind] || "tag", 16)),
+				h("div", { style: "min-width:0" }, e.text, h("div", { class: "hint" }, when(e.at)))))
+				: h("p", { class: "hint" }, "Nothing yet.")));
 }
 
 // Admin: whether Twilio is set up, and the top up packs clients can buy.

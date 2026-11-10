@@ -1,5 +1,15 @@
 # Changes
 
+## 1.16.0: Billing in the app
+
+- **Your plan and billing** on a paying client's Account tab: their plan, price and renewal date, extra logins, and the card on file.
+- **Change plan**: move up or down, or between monthly and yearly, with the cost for today shown before anything is charged. If the card is declined, nothing changes.
+- **Receipts**: every bill with a PDF and a link to view it. Stripe makes them, with the logo and colour set under Branding in Stripe.
+- **Change card** opens Stripe's own card page and comes straight back, so card numbers never reach the app.
+- **Cancel my plan** ends it when the paid period does, and **Keep my plan** undoes that.
+- **Client billing** on the Admin tab: each client's totals, payments (including failed ones) and a history of sign up, plan changes, holds and cancelling.
+- **Refunds**: refund a payment in full or in part with a reason, and choose to leave their plan, end it when the paid period does, or end it now.
+
 ## 1.15.1: Apps catch up
 
 - The choices on the Add page line up at the top, so the chosen one no longer sits lower than the rest.

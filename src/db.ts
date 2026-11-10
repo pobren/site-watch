@@ -278,8 +278,12 @@ const COLUMNS = [
 	"ALTER TABLE notices ADD COLUMN ends_at TEXT",
 	// 1.15.1: a team member's own app sign in (apps.ts). Null for the account's own login.
 	"ALTER TABLE app_devices ADD COLUMN member_id TEXT",
+	// 1.16.0: each client's billing history for the Admin tab (money.ts). Payments and refunds are read from Stripe.
+	`CREATE TABLE IF NOT EXISTS billing_events (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL)`,
+	"CREATE INDEX IF NOT EXISTS billing_events_account ON billing_events (account_id, at)",
 ];
-const SCHEMA_VERSION = "15";
+const SCHEMA_VERSION = "16";
 
 let ready: Promise<void> | null = null;
 
@@ -357,4 +361,9 @@ export async function hasPro(db: D1Database, a: Pick<AccountRow, "role" | "plan"
 	if (a.role === "owner") return true;
 	const plan = await planById(db, a.plan);
 	return !!plan && plan.free !== 1;
+}
+
+/** A line in a client's billing history (money.ts): signed up, plan changes, holds, cancelling and refunds. */
+export async function logEvent(db: D1Database, accountId: string, kind: string, text: string): Promise<void> {
+	await db.prepare("INSERT INTO billing_events (account_id, at, kind, text) VALUES (?, ?, ?, ?)").bind(accountId, new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), kind, text.slice(0, 300)).run().catch((e) => console.error("billing history", e));
 }
