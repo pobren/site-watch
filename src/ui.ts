@@ -476,7 +476,8 @@ function spark(points) {
 function overview() {
 	const m = state.monitors;
 	if (state.me.unverified) return h("div", null, h("h1", null, "Please confirm your email address"), h("p", { class: "lead" }, "We've sent a link to " + state.me.email + ". Once you click it, we start checking. You can add your website now."),
-		h("div", { class: "btns" }, btn("Add your website", "plus", () => go("add"), "main"), btn("Send the email again", "send", (e) => act(e.currentTarget, () => api("/api/verify/again", {}), "Sent. Check your inbox and spam folder."))));
+		h("p", { class: "hint" }, "If it isn't in your inbox, check your Junk or Spam folder and mark it as not junk, so our alerts reach your inbox too."),
+		h("div", { class: "btns" }, btn("Add your website", "plus", () => go("add"), "main"), btn("Send the email again", "send", (e) => act(e.currentTarget, () => api("/api/verify/again", {}), "Sent. If it isn't in your inbox, check your Junk or Spam folder."))));
 	if (!state.me.live) return h("div", null, h("h1", null, "Your plan isn't active"), h("p", { class: "lead" }, "Your checks are paused until it is. Choose a plan or update your payment on the Account tab."), btn("Open Account", "user", () => go("account"), "main"));
 	if (!m.length) return h("div", null, h("h1", null, "Welcome to " + brand().name), h("p", { class: "lead" }, "Add your first website, mail server, port or scheduled job and we'll start watching it straight away."), btn("Add something to watch", "plus", () => go("add"), "main"));
 	const count = (f) => m.filter(f).length;
