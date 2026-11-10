@@ -4,8 +4,9 @@
 import { overall, shownOf, statusOf, stateOf, uptime, dailyBars, iso, type Shown } from "./core.ts";
 import { install, isLive, accountById, hasPro, type MonitorRow } from "./db.ts";
 import { subLimits } from "./subscribers.ts";
+import { readSocial, socialLine } from "./social.ts";
 
-interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; logo?: string | null; support?: string | null; colour?: string | null; subscribe?: number; password?: string | null; mail_token?: string | null }
+interface PageRow { id: string; account_id: string; slug: string; title: string; intro: string | null; host: string | null; monitors: string; logo?: string | null; support?: string | null; colour?: string | null; social?: string | null; subscribe?: number; password?: string | null; mail_token?: string | null }
 interface NoticeRow { id: number; title: string; body: string; impact: string; created_at: string; resolved_at: string | null; starts_at?: string | null; ends_at?: string | null }
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
@@ -49,7 +50,7 @@ export async function statusData(db: D1Database, page: PageRow, now = new Date()
 	let all = overall(items.map((i) => i.state));
 	if (open.some((n) => n.impact === "major") && all.state === "up") all = { state: "degraded", text: "Some problems" };
 	else if (open.some((n) => n.impact === "maintenance") && all.state === "up") all = { state: "maintenance", text: "Maintenance under way" };
-	return { title: page.title, intro: page.intro, logo: page.logo ?? null, support: page.support ?? null, colour: page.colour ?? null, overall: all, items, notices, updated: iso(now) };
+	return { title: page.title, intro: page.intro, logo: page.logo ?? null, support: page.support ?? null, colour: page.colour ?? null, social: readSocial(page.social), overall: all, items, notices, updated: iso(now) };
 }
 
 /** How long a notice was up, in words: "under a minute", "35 minutes", "2 hours 10 minutes", "3 days 4 hours". */
@@ -69,7 +70,7 @@ export async function renderStatus(db: D1Database, page: PageRow, base = ""): Pr
 	if (!account || !isLive(account)) return new Response("This status page isn't available.", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
 	const d = await statusData(db, page);
 	// Logo, colour and contact are Pro: a page on a free plan shows none of them.
-	if (!(await hasPro(db, account))) { d.logo = null; d.support = null; d.colour = null; }
+	if (!(await hasPro(db, account))) { d.logo = null; d.support = null; d.colour = null; d.social = {}; }
 	const { brand, origin } = await install(db);
 	// The subscribe form, when the page takes subscribers and the plan has room for them (subscribers.ts).
 	const sl = await subLimits(db, account);
@@ -126,7 +127,7 @@ ${d.items.map((i) => `<div class="card"><div class="row"><span class="name">${es
 <div class="bars">${i.bars.map(bar).join("")}</div><div class="under"><span><span class="span90">90 days ago</span><span class="span30" style="display:none">30 days ago</span></span><span>${i.uptime90 === null ? "" : `${i.uptime90}% up`}</span><span>Today</span></div></div>`).join("") || '<div class="card">Nothing on this page yet.</div>'}
 ${d.notices.some((n) => n.resolved_at) ? `<h2>Recently</h2>${d.notices.filter((n) => n.resolved_at).map(noticeCard).join("")}` : ""}
 ${subscribeCard}
-<footer>Updated ${when(d.updated)}. This page refreshes itself every minute.${d.support ? `<br>Questions? ${d.support.includes("@") ? `<a href="mailto:${esc(d.support)}">${esc(d.support)}</a>` : `<a href="${esc(d.support)}">${esc(d.support.replace(/^https:\/\//, ""))}</a>`}` : ""}<br>Monitored by ${origin ? `<a href="${esc(origin)}">${esc(brand.name)}</a>` : esc(brand.name)}${brand.hideCredit ? "" : ' · Runs on <a href="https://paulobrien.dev/watch/">Site Watch</a>'}</footer>
+<footer>Updated ${when(d.updated)}. This page refreshes itself every minute.${socialLine(d.social, esc) ? `<br>${socialLine(d.social, esc)}` : ""}${d.support ? `<br>Questions? ${d.support.includes("@") ? `<a href="mailto:${esc(d.support)}">${esc(d.support)}</a>` : `<a href="${esc(d.support)}">${esc(d.support.replace(/^https:\/\//, ""))}</a>`}` : ""}<br>Monitored by ${origin ? `<a href="${esc(origin)}">${esc(brand.name)}</a>` : esc(brand.name)}${brand.hideCredit ? "" : ' · Runs on <a href="https://paulobrien.dev/watch/">Site Watch</a>'}</footer>
 </main></body></html>`;
 	return new Response(html, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "public, max-age=30" } });
 }
