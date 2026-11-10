@@ -1,5 +1,9 @@
 # Changes
 
+## 1.16.1: Check your Junk folder
+
+- After signing up, the confirm page tells people to look in their Junk or Spam folder if the email isn't in their inbox, and to mark it as not junk so alerts arrive too. "Send the email again" says the same.
+
 ## 1.16.0: Billing in the app
 
 - **Your plan and billing** on a paying client's Account tab: their plan, price and renewal date, extra logins, and the card on file.
