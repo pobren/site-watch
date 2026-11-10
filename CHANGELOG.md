@@ -1,5 +1,10 @@
 # Changes
 
+## 1.17.0: Social accounts and sharing notices
+
+- **Your social accounts** on a status page (Pro and Business): add your X, Bluesky, LinkedIn, Facebook, Instagram, Threads, YouTube or Mastodon in the page editor, and the page footer says "Follow us on" with a link to each.
+- **Share on social media** under each notice on the Status pages tab: buttons for X, Bluesky, LinkedIn and Facebook open the site with the notice and the page link filled in, so you can change the words before you post. "Copy for social" copies the same words to paste anywhere.
+
 ## 1.16.1: Check your Junk folder
 
 - After signing up, the confirm page tells people to look in their Junk or Spam folder if the email isn't in their inbox, and to mark it as not junk so alerts arrive too. "Send the email again" says the same.

@@ -282,8 +282,10 @@ const COLUMNS = [
 	`CREATE TABLE IF NOT EXISTS billing_events (
 		id INTEGER PRIMARY KEY AUTOINCREMENT, account_id TEXT NOT NULL, at TEXT NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL)`,
 	"CREATE INDEX IF NOT EXISTS billing_events_account ON billing_events (account_id, at)",
+	// 1.17.0: the page owner's social accounts, shown as icons in the page footer (status.ts SOCIALS).
+	"ALTER TABLE pages ADD COLUMN social TEXT",
 ];
-const SCHEMA_VERSION = "16";
+const SCHEMA_VERSION = "17";
 
 let ready: Promise<void> | null = null;
 

@@ -173,6 +173,7 @@ const ICONS = {
 	link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
 	screen: '<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>',
 	game: '<path d="M6 11h4M8 9v4M15 12h.01M18 10h.01"/><rect x="2" y="6" width="20" height="12" rx="4"/>',
+	share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
 	users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
 };
 const icon = (n, size = 18) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg"); s.setAttribute("width", size); s.setAttribute("height", size); s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor"); s.setAttribute("stroke-width", "2"); s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round"); s.setAttribute("aria-hidden", "true"); s.innerHTML = ICONS[n] || ""; return s; };
@@ -797,6 +798,29 @@ function extrasBlock(pg) {
 	return [lockPart, mailPart, badgePart];
 }
 
+// Sharing a notice on social media (1.17.0): each button opens the network with the words filled in, to change before posting.
+function shareText(pg, n) {
+	const link = pg.host ? "https://" + pg.host + "/" : pg.address;
+	const kind = n.impact === "maintenance" ? "Planned maintenance" : n.resolved_at ? "Resolved" : n.impact === "major" ? "Major problem" : "Problem";
+	const first = (n.body || "").split("\n").find((l) => l.trim()) || "";
+	const words = kind + ": " + n.title + (first ? ". " + first : "");
+	return { link, words: words.length > 220 ? words.slice(0, 217) + "..." : words };
+}
+function shareBlock(pg, n) {
+	const { link, words } = shareText(pg, n);
+	const both = words + " " + link;
+	const at = (label, href) => h("a", { class: "btn small", href, target: "_blank", rel: "noopener" }, icon("share"), label);
+	return h("div", { class: "btns" },
+		at("X", "https://x.com/intent/post?text=" + encodeURIComponent(words) + "&url=" + encodeURIComponent(link)),
+		at("Bluesky", "https://bsky.app/intent/compose?text=" + encodeURIComponent(both)),
+		at("LinkedIn", "https://www.linkedin.com/feed/?shareActive=true&text=" + encodeURIComponent(both)),
+		at("Facebook", "https://www.facebook.com/sharer/sharer.php?u=" + encodeURIComponent(link)),
+		btn("Copy for social", "copy", async (e) => { const b = e.currentTarget; try { await navigator.clipboard.writeText(both); b.lastChild.textContent = "Copied"; } catch {} }, "small"));
+}
+
+// The page owner's social accounts, shown in the page footer (social.ts).
+const SOCIALS = [["x", "X", "https://x.com/yourname"], ["bluesky", "Bluesky", "https://bsky.app/profile/yourname.bsky.social"], ["linkedin", "LinkedIn", "https://www.linkedin.com/company/yourname"], ["facebook", "Facebook", "https://www.facebook.com/yourname"], ["instagram", "Instagram", "https://www.instagram.com/yourname"], ["threads", "Threads", "https://www.threads.net/@yourname"], ["youtube", "YouTube", "https://www.youtube.com/@yourname"], ["mastodon", "Mastodon", "https://mastodon.social/@yourname"]];
+
 function pages() {
 	const ed = editing && editing.page !== undefined ? editing : null;
 	const p = ed && ed.page ? state.pages.find((x) => x.id === ed.page) : null;
@@ -805,12 +829,17 @@ function pages() {
 	const intro = h("textarea", null, p ? p.intro || "" : "");
 	const hostI = h("input", { value: p ? p.host || "" : "", placeholder: "status.example.com" });
 	const picks = state.monitors.map((m) => h("input", { type: "checkbox", value: m.id, checked: p ? p.monitors.includes(m.id) : true }));
+	const canBrand = !state.limits || state.limits.branding;
+	const socialIn = Object.fromEntries(SOCIALS.map(([k, , eg]) => [k, h("input", { value: p && p.social ? p.social[k] || "" : "", placeholder: eg, inputmode: "url" })]));
 	const form = ed ? h("div", { class: "card" }, h("h2", null, p ? "Edit " + p.title : "New status page"),
 		field("Title", title), field("Address", slug, "Letters, numbers and dashes. The page is at /status/ followed by this."), field("A line under the title (optional)", intro),
 		field("Its own domain (optional)", hostI, "Add the domain to this Worker in Cloudflare (Settings, Domains & Routes), then put it here so the page shows on its home page."),
 		h("label", null, "Show these"), state.monitors.map((m, i) => h("label", { class: "check" }, picks[i], m.label, h("span", { class: "kind" }, KIND[m.kind]))),
 		h("p", { class: "hint" }, "Only names show on the page, never server addresses or check-in links. Give things friendly names on the Overview tab."),
-		h("div", { class: "btns" }, btn("Save page", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/pages", { id: p ? p.id : undefined, title: title.value, slug: slug.value, intro: intro.value, host: hostI.value, monitors: picks.filter((c) => c.checked).map((c) => c.value) }); editing = null; return r; }, "Saved"), "main"), btn("Cancel", "x", () => { editing = null; draw(); }))) : null;
+		canBrand ? h("details", { open: !!(p && p.social && Object.keys(p.social).length) }, h("summary", { style: "cursor:pointer;font-weight:700" }, "Your social accounts (optional)"),
+			h("p", { class: "hint" }, "Shown at the foot of the page, so visitors can follow your updates there too. Paste the address of each profile page."),
+			h("div", { class: "two" }, SOCIALS.map(([k, label]) => field(label, socialIn[k])))) : null,
+		h("div", { class: "btns" }, btn("Save page", "save", (e) => act(e.currentTarget, async () => { const r = await api("/api/pages", Object.assign({ id: p ? p.id : undefined, title: title.value, slug: slug.value, intro: intro.value, host: hostI.value, monitors: picks.filter((c) => c.checked).map((c) => c.value) }, canBrand ? { social: Object.fromEntries(SOCIALS.map(([k]) => [k, socialIn[k].value.trim()])) } : {})); editing = null; return r; }, "Saved"), "main"), btn("Cancel", "x", () => { editing = null; draw(); }))) : null;
 	return h("div", null, h("h1", null, "Status pages"), h("p", { class: "lead" }, "A public page showing whether things are working, with 90 days of history and your notices."),
 		form,
 		!ed ? h("div", { class: "btns", style: "margin-bottom:16px" }, btn("New status page", "plus", () => { editing = { page: null }; draw(); }, "main")) : null,
@@ -828,7 +857,8 @@ function pages() {
 				h("div", { class: "btns" }, h("a", { class: "btn", href: pg.address, target: "_blank", rel: "noopener" }, icon("open"), "Open"), btn("Edit", "edit", () => { editing = { page: pg.id }; draw(); window.scrollTo(0, 0); }), btn("Delete", "trash", (e) => { if (confirm("Delete this status page?")) act(e.currentTarget, () => api("/api/pages/" + pg.id, undefined, "DELETE")); }, "danger")),
 				h("h3", { style: "margin-top:16px" }, "Notices"),
 				notes.length ? notes.map((n) => h("div", { class: "note" }, h("b", null, n.title), " · " + n.impact + " · " + (n.ends_at ? when(n.starts_at) + " to " + when(n.ends_at) : when(n.created_at)) + (n.resolved_at ? " · resolved " + when(n.resolved_at) : ""), n.body ? h("div", null, n.body) : null,
-					h("div", { class: "btns" }, !n.resolved_at ? btn("Mark resolved", "check", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id + "/resolve", {})), "small") : null, btn("Delete", "trash", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id, undefined, "DELETE")), "small danger")))) : h("p", { class: "hint" }, "None in the last 14 days."),
+					h("div", { class: "btns" }, !n.resolved_at ? btn("Mark resolved", "check", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id + "/resolve", {})), "small") : null, btn("Delete", "trash", (e) => act(e.currentTarget, () => api("/api/notices/" + n.id, undefined, "DELETE")), "small danger")),
+					!pg.locked ? h("details", null, h("summary", { style: "cursor:pointer;font-size:14px;font-weight:700" }, "Share on social media"), h("p", { class: "hint" }, "Each button opens the site with this notice filled in, so you can change the words before you post."), shareBlock(pg, n)) : null)) : h("p", { class: "hint" }, "None in the last 14 days."),
 				h("details", null, h("summary", { style: "cursor:pointer;font-weight:700" }, "Post a notice"), field("Title", ntitle), field("Details", nbody), field("Type", nimpact), nwindow,
 					(pg.subscribers || 0) > 0 ? h("label", { class: "check" }, tell, "Email and post this to the page's " + fmt(pg.subscribers) + " subscribers") : null,
 					h("div", { class: "btns" }, btn("Post notice", "send", (e) => act(e.currentTarget, () => api("/api/pages/" + pg.id + "/notices", { title: ntitle.value, body: nbody.value, impact: nimpact.value, tell: tell.checked, startsAt: nimpact.value === "maintenance" && nend.value ? iso(nstart.value) || new Date().toISOString() : "", endsAt: nimpact.value === "maintenance" ? iso(nend.value) : "" }), "Posted")))),

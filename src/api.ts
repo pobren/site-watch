@@ -20,6 +20,7 @@ import {
 } from "./core.ts";
 import { DEFAULT_BRAND, hasPro, install, isLive, logEvent, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { cleanSub, vapidKeys } from "./push.ts";
+import { cleanSocial, readSocial } from "./social.ts";
 import { deleteKey, listKeys, makeKey } from "./keys.ts";
 import { connectorLinked, revokeAll } from "./oauth.ts";
 import { nameProblem, tidyName } from "./names.ts";
@@ -113,7 +114,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		channels: chans.results.filter((c) => !isPhone(c.kind) || phoneSecretOf(c.secret).verified).map((c) => ({ id: c.id, kind: c.kind, kindName: KIND_NAMES[c.kind] ?? c.kind, name: c.name, where: whereOf(c), secret: c.kind === "webhook" ? c.secret : null, endpoint: c.kind === "push" ? c.url : undefined, on: c.on_off === 1, fails: c.fails })),
 		phones: await phonesState(env, me, chans.results, limits),
 		// Never the password's hash: only whether there is one, and the address for posting notices by email.
-		pages: pages.results.map(({ password, mail_token, ...p }) => ({ ...p, monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug), subscribers: subCounts.get(p.id as string) ?? 0, locked: !!password, updateEmail: updateAddress(env, { mail_token }), badge: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/badge.svg`, widget: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/widget` })),
+		pages: pages.results.map(({ password, mail_token, ...p }) => ({ ...p, social: readSocial((p as { social?: string | null }).social), monitors: JSON.parse(p.monitors), address: pageAddress(env, origin, p.slug), subscribers: subCounts.get(p.id as string) ?? 0, locked: !!password, updateEmail: updateAddress(env, { mail_token }), badge: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/badge.svg`, widget: `${pageAddress(env, origin, p.slug).replace(/\/$/, "")}/widget` })),
 		// Extras on this plan: password protected pages, and whether this install takes notices by email.
 		extras: { lock: await canLock(db, me), emailUpdates: !!env.UPDATE_DOMAIN, reports: await hasPro(db, me) },
 		// Status page subscribers: the plan's limits and this month's emails (subscribers.ts).
@@ -550,7 +551,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		const intro = typeof b.intro === "string" ? b.intro.trim().slice(0, 500) || null : null;
 		// The page's own logo: left out keeps what's there, empty removes it.
 		// Logo, colour and contact come with Pro: on other plans they're left as they are.
-		if (!limits.branding) { delete b.logo; delete b.support; delete b.colour; }
+		if (!limits.branding) { delete b.logo; delete b.support; delete b.colour; delete b.social; }
 		const logo = b.logo === undefined ? undefined : cleanLogo(b.logo);
 		if (logo && typeof logo === "object") return bad(logo.error);
 		// Who visitors contact (the customer, never us) and the page's colour: left out keeps what's there.
@@ -564,6 +565,9 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		}
 		const colour = b.colour === undefined ? undefined : b.colour === "" || b.colour === null ? null : cleanColour(b.colour);
 		if (colour === null && b.colour) return bad("Please pick a colour.");
+		// The page owner's social accounts (status.ts SOCIALS): left out keeps what's there.
+		const social = b.social === undefined ? undefined : cleanSocial(b.social);
+		if (social && typeof social === "object") return bad(social.error);
 		// With Cloudflare for SaaS, own domains go through the wizard (/domain below), so this keeps what's there.
 		const managed = saasReady(env);
 		let host = typeof b.host === "string" && b.host.trim() ? cleanHost(b.host) : null;
@@ -585,6 +589,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if (logo !== undefined) await db.prepare("UPDATE pages SET logo = ? WHERE id = ?").bind(logo, id).run();
 			if (support !== undefined) await db.prepare("UPDATE pages SET support = ? WHERE id = ?").bind(support, id).run();
 			if (colour !== undefined) await db.prepare("UPDATE pages SET colour = ? WHERE id = ?").bind(colour, id).run();
+			if (social !== undefined) await db.prepare("UPDATE pages SET social = ? WHERE id = ?").bind(social, id).run();
 			// Subscribers: whether the page takes them, and whether things going down and back up are sent automatically.
 			if (typeof b.subscribe === "boolean") await db.prepare("UPDATE pages SET subscribe = ? WHERE id = ?").bind(b.subscribe ? 1 : 0, id).run();
 			if (typeof b.autoNotify === "boolean") await db.prepare("UPDATE pages SET auto_notify = ? WHERE id = ?").bind(b.autoNotify ? 1 : 0, id).run();
@@ -597,7 +602,7 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 			if (b.removePassword === true) await db.prepare("UPDATE pages SET password = NULL WHERE id = ?").bind(id).run();
 			if (b.mailUpdates === true) await db.prepare("UPDATE pages SET mail_token = ? WHERE id = ?").bind(newId(12), id).run();
 			if (b.mailUpdates === false) await db.prepare("UPDATE pages SET mail_token = NULL WHERE id = ?").bind(id).run();
-		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, support, colour, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, support ?? null, colour ?? null, iso(new Date())).run();
+		} else await db.prepare("INSERT INTO pages (id, account_id, slug, title, intro, host, monitors, logo, support, colour, social, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").bind(newId(6), me.id, slug, title, intro, host, JSON.stringify(ids), logo ?? null, support ?? null, colour ?? null, social ?? null, iso(new Date())).run();
 		return reply({ ok: true });
 	}
 	// A status page on the customer's own domain: the set-up wizard adds it, checks it, and removes it.
