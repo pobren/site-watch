@@ -366,12 +366,15 @@ async function signupView() {
 	const period = h("div");
 	const submit = h("button", { class: "btn main", type: "submit" });
 	const after = h("div");
+	const pay = h("div");
 	const drawTiles = () => {
 		const cur = plans.find((p) => p.id === chosen);
 		tiles.replaceChildren(...plans.map((p) => planTile(p, p.id === chosen, yearly, () => { chosen = p.id; drawTiles(); })));
 		period.replaceChildren(anyYear ? periodSwitch(yearly, (y) => { yearly = y; drawTiles(); }, monthsFree(plans)) : "");
 		submit.replaceChildren(icon(cur.free ? "check" : "lock"), cur.free ? "Start free" : "Continue to payment");
-		after.replaceChildren(cur.free ? h("p", { class: "hint" }, "No card needed. You can upgrade any time from your account.") : payStrip());
+		// The cards and wallets show under the plans whichever plan is chosen, so people see how paid plans are paid.
+		after.replaceChildren(cur.free ? h("p", { class: "hint" }, "No card needed. You can upgrade any time from your account.") : null);
+		pay.replaceChildren(plans.some((p) => !p.free) ? payStrip() : "");
 	};
 	drawTiles();
 	const name = h("input", { autocomplete: "organization" });
@@ -379,7 +382,7 @@ async function signupView() {
 	const pw = h("input", { type: "password", autocomplete: "new-password", minlength: 10, required: true });
 	const card = h("form", { class: "card", onsubmit: (e) => { e.preventDefault(); act(submit, async () => { const r = await api("/api/signup", { plan: chosen, yearly, name: name.value, email: email.value, password: pw.value, tz: tz(), ts: await robot() }); location.href = r.checkout || r.next || "/"; }); } },
 		h("h1", null, "Sign up"), h("p", { class: "lead" }, plans.some((p) => p.free) ? "Start free with no card, or choose a paid plan and pay securely by card." : "Choose a plan, make your account, then pay securely by card."),
-		h("div", { class: "step" }, "1. Choose your plan"), period, tiles,
+		h("div", { class: "step" }, "1. Choose your plan"), period, tiles, pay,
 		h("div", { class: "step" }, "2. Make your account"),
 		h("div", { class: "two" }, field("Your name or business", name), field("Email address", email, "You'll sign in with it, and alerts go here.")), field("Choose a password", pw, "At least 10 characters."),
 		h("div", { class: "btns" }, submit), after,
