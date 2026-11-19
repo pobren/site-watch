@@ -1,5 +1,9 @@
 # Changes
 
+## 1.17.1: Text alerts on their own
+
+- When an install sends text messages but not WhatsApp, the Alerts page, plan list, emails and messages now just say text alerts, and US numbers show as coming soon. WhatsApp is named again once its Twilio settings are added.
+
 ## 1.17.0: Social accounts and sharing notices
 
 - **Your social accounts** on a status page (Pro and Business): add your X, Bluesky, LinkedIn, Facebook, Instagram, Threads, YouTube or Mastodon in the page editor, and the page footer says "Follow us on" with a link to each.

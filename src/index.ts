@@ -34,7 +34,7 @@ import { appPage, connectPage } from "./ui.ts";
 
 export { Probe } from "./probe.ts";
 
-const VERSION = "1.17.0";
+const VERSION = "1.17.1";
 
 const SECURITY = {
 	"x-content-type-options": "nosniff",

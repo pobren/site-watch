@@ -193,7 +193,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 		const pack = (await phonePacks(db))[Number(b.pack)];
 		const plan = await db.prepare("SELECT * FROM plans WHERE id = ?").bind(me.plan).first<PlanRow>();
 		if (!pack) return json({ error: "Please choose a top up." }, 400);
-		if (!(me.status === "active" || me.status === "trialing") || !plan?.phone_alerts) return json({ error: "Top ups are for plans that include text and WhatsApp alerts." }, 403);
+		if (!(me.status === "active" || me.status === "trialing") || !plan?.phone_alerts) return json({ error: "Top ups are for plans that include text alerts." }, 403);
 		const managed = env.STRIPE_MANAGED_PAYMENTS === "on";
 		try {
 			const session = await stripe<{ url: string }>(env, "/checkout/sessions", {

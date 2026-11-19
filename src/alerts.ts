@@ -9,7 +9,7 @@ import { accountById, getMeta, install, newId, planById, setMeta, type AccountRo
 import { brandedHtml, toneOf, type EmailLook } from "./email.ts";
 import { sendApns } from "./apns.ts";
 import { sendPush, type PushSub } from "./push.ts";
-import { flushPhones, isPhone, monthStart, queuePhone, type Allowance } from "./phones.ts";
+import { flushPhones, isPhone, monthStart, phoneReady, queuePhone, type Allowance } from "./phones.ts";
 import { WL } from "./whitelabel.ts";
 
 interface ChannelRow { id: number; kind: string; name: string; url: string; secret: string | null; on_off: number; fails: number }
@@ -151,8 +151,9 @@ export async function sendPhones(env: Env, now = new Date()): Promise<void> {
 			const key = `phones_out:${a.id}:${monthStart(now).slice(0, 7)}`;
 			if (!a.alert_to || !inst.alertFrom || (await getMeta(db, key))) return;
 			await setMeta(db, key, "1");
-			await sendEmail(env, inst.alertFrom, a.alert_to, `Your text and WhatsApp alerts have run out this month`,
-				`You've used all ${left.included ?? ""} text and WhatsApp alerts included with your plan this month, so we've held the latest one. Alerts carry on by email and on your devices as usual, and phone alerts start again on the 1st.\n\nNeed them sooner? Buy a top up on the Alerts page: ${inst.origin ?? ""}/#alerts`,
+			const kinds = phoneReady(env).whatsapp ? "text and WhatsApp alerts" : "text alerts";
+			await sendEmail(env, inst.alertFrom, a.alert_to, `Your ${kinds} have run out this month`,
+				`You've used all ${left.included ?? ""} ${kinds} included with your plan this month, so we've held the latest one. Alerts carry on by email and on your devices as usual, and phone alerts start again on the 1st.\n\nNeed them sooner? Buy a top up on the Alerts page: ${inst.origin ?? ""}/#alerts`,
 				inst.brand.name, { brand: inst.brand, tone: "warn" });
 		},
 	}, now);
