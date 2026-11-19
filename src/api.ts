@@ -407,10 +407,10 @@ export async function act(env: Env, me: AccountRow, path: string, method: string
 		const via = (b.via === "sms" ? "sms" : "whatsapp") as PhoneKind;
 		const plan = owner ? null : await planById(db, me.plan);
 		const left = await allowanceOf(db, me, plan);
-		if (!owner && !((limits.phoneAlerts ?? 0) > 0 || left.credits > 0)) return bad("Text and WhatsApp alerts aren't on your plan. Upgrade on the Account tab to add them.", 403);
+		if (!owner && !((limits.phoneAlerts ?? 0) > 0 || left.credits > 0)) return bad(`${phoneReady(env).whatsapp ? "Text and WhatsApp alerts aren't" : "Text alerts aren't"} on your plan. Upgrade on the Account tab to add them.`, 403);
 		const n = cleanPhone(b.number, countriesOf(env));
 		if ("error" in n) return bad(n.error);
-		if (!canSend(env, via, n.number)) return bad(via === "sms" ? "We can't send text messages to that number yet. Try WhatsApp instead." : "WhatsApp alerts aren't set up here yet.");
+		if (!canSend(env, via, n.number)) return bad(via === "sms" ? (phoneReady(env).whatsapp ? "We can't send text messages to that number yet. Try WhatsApp instead." : "We can't send text messages to that number yet. UK numbers only for now.") : "WhatsApp alerts aren't set up here yet.");
 		const mine = await db.prepare("SELECT id, kind, url FROM channels WHERE account_id = ? AND kind IN ('sms', 'whatsapp')").bind(me.id).all<{ id: number; kind: string; url: string }>();
 		const same = mine.results.find((c) => c.url === n.number && c.kind === via);
 		if (!same && mine.results.length >= MAX_PHONES) return bad(`That's ${MAX_PHONES} phones already. Remove one first.`);
