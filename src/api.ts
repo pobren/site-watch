@@ -26,6 +26,7 @@ import { connectorLinked, revokeAll } from "./oauth.ts";
 import { nameProblem, tidyName } from "./names.ts";
 import { addHostname, domainState, removeHostname, saasReady } from "./domains.ts";
 import { allowanceOf, canSend, cleanPhone, confirmCode, countriesOf, isPhone, MAX_PHONES, maskPhone, PHONE_NAMES, phonePacks, phoneReady, phoneSecretOf, sendCode, testPhone, type PhoneKind, type PhonePack } from "./phones.ts";
+import { canEmail } from "./ses.ts";
 
 /** Where a status page lives: name.PAGE_DOMAIN when the install has one, otherwise /status/name. */
 export function pageAddress(env: Env, origin: string, slug: string): string {
@@ -123,7 +124,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 		domainTarget: env.DOMAIN_TARGET?.toLowerCase() ?? null,
 		notices: notices.results,
 		alerts: alerts.results,
-		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: !!env.EMAIL && !!inst.alertFrom },
+		settings: { alertTo: me.alert_to, tz: me.tz, alertsPerDay: me.alerts_per_day, emailReady: canEmail(env) && !!inst.alertFrom },
 		// Regions that confirm a failure before a "down" alert, when this install has them (probe.ts).
 		regions: env.PROBES ? REGIONS.map((r) => r.name) : [],
 		choices: { every: everyChoices(limits).filter((n) => n >= 1), fast: limits.fast, heartbeatEvery: HEARTBEAT_EVERY, mailPorts: MAIL_PORTS, dnsTypes: DNS_TYPES, apiMethods: API_METHODS },
@@ -141,7 +142,7 @@ async function everything(env: Env, me: AccountRow, origin: string) {
 			db.prepare("SELECT * FROM plans ORDER BY position, name").all<PlanRow>(),
 		]);
 		out.admin = {
-			alertFrom: inst.alertFrom, emailBinding: !!env.EMAIL, sell: inst.sell, stripeKey: !!env.STRIPE_SECRET_KEY, stripeWebhook: !!env.STRIPE_WEBHOOK_SECRET,
+			alertFrom: inst.alertFrom, emailBinding: canEmail(env), sell: inst.sell, stripeKey: !!env.STRIPE_SECRET_KEY, stripeWebhook: !!env.STRIPE_WEBHOOK_SECRET,
 			webhookUrl: `${origin}/stripe/webhook`, signupUrl: `${origin}/signup`, clients: clients.results, signupCap: await signupCap(db), queue: !!env.CHECKS,
 			plans: plans.results.map((p) => ({ ...publicPlan(p), stripePrice: p.stripe_price, stripePriceYear: p.stripe_price_year, priceYear: p.price_label_year, on: p.on_off === 1, position: p.position })),
 			licence: { websites: mons.results.filter((m) => m.kind === "website").length, limit: LICENCE_SITES },

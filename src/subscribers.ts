@@ -15,7 +15,7 @@
 import { brandedHtml } from "./email.ts";
 import { cleanEmail, iso, rawEmail } from "./core.ts";
 import { accountById, install, isLive, newId, planById, type AccountRow, type Env, type SubSend } from "./db.ts";
-import { sesSend, type AwsKeys } from "./ses.ts";
+import { sesKeys, sesSend } from "./ses.ts";
 import { esc } from "./status.ts";
 
 export const HOOK_KINDS = ["slack", "discord", "teams", "google", "webhook"] as const;
@@ -23,6 +23,9 @@ export const HOOK_NAMES: Record<string, string> = { slack: "Slack", discord: "Di
 /** New subscriptions a page takes in an hour, and from one visitor, so the form can't be used to send lots of emails. */
 const PAGE_HOURLY = 30;
 const VISITOR_HOURLY = 5;
+/** Unconfirmed email sign-ups across every status page on the install in a day. Status pages can sit on their own
+ *  domains, where a Turnstile widget can't run, so this caps what a robot could make the install send (27 Nov 2026). */
+const INSTALL_DAILY_PENDING = 50;
 /** Messages in one queue message, and the most sent straight away when there's no queue. */
 const PER_MESSAGE = 25;
 const INLINE_MAX = 200;
@@ -103,6 +106,8 @@ export async function handleSubscribe(request: Request, env: Env, page: PageRow)
 	if (kind === "email") {
 		const email = cleanEmail(form.get("email"));
 		if (!email) return no("Please enter your email address.");
+		const pending = await db.prepare("SELECT COUNT(*) AS n FROM subscribers WHERE kind = 'email' AND confirmed_at IS NULL AND created_at > ?").bind(iso(new Date(Date.now() - 86_400_000))).first<{ n: number }>();
+		if ((pending?.n ?? 0) >= INSTALL_DAILY_PENDING) return no("Lots of people have subscribed today. Please try again tomorrow.", 429);
 		if (limits.subscribers !== null) {
 			const n = await db.prepare("SELECT COUNT(*) AS n FROM subscribers WHERE account_id = ? AND kind = 'email'").bind(account.id).first<{ n: number }>();
 			if ((n?.n ?? 0) >= limits.subscribers) return no("This status page has as many email subscribers as it can take. Please check the page itself for news.", 403);
@@ -236,8 +241,13 @@ async function sendNow(env: Env, s: SubSend): Promise<string | null> {
 		const html = brandedHtml(s.subject, s.text, { brand, button: "Open the status page", footer: `You're getting this because you subscribed to updates about ${s.fromName}. Unsubscribe: ${s.unsub}` });
 		const text = `${s.text}\n\nUnsubscribe: ${s.unsub}`;
 		const raw = rawEmail(s.from, s.target, s.subject, text, new Date(), newId(12), s.fromName, html, [`List-Unsubscribe: <${s.unsub}>`, "List-Unsubscribe-Post: List-Unsubscribe=One-Click"]);
-		const keys: AwsKeys | null = env.SES_ACCESS_KEY_ID && env.SES_SECRET_ACCESS_KEY ? { accessKeyId: env.SES_ACCESS_KEY_ID, secretAccessKey: env.SES_SECRET_ACCESS_KEY, region: env.SES_REGION || "eu-west-1" } : null;
-		if (keys) return sesSend(keys, s.from, s.target, raw).catch((e) => String(e));
+		const keys = sesKeys(env);
+		if (keys) {
+			const problem = await sesSend(keys, s.from, s.target, raw).catch((e) => String(e));
+			// "slow" means try the batch again later; anything else falls back to the EMAIL binding when there is one.
+			if (!problem || problem === "slow" || !env.EMAIL) return problem;
+			console.error(`SES refused mail from ${s.from}, trying the EMAIL binding: ${problem}`);
+		}
 		if (!env.EMAIL) return "email isn't set up";
 		try {
 			// Loaded here so pages that only show the subscribe form (and the tests) don't need the email module.

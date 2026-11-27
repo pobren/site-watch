@@ -13,6 +13,7 @@ import { cleanEmail, cleanName, iso, verifyStripe } from "./core.ts";
 import { getMeta, install, logEvent, newId, type AccountRow, type Env, type PlanRow } from "./db.ts";
 import { phonePacks, TOPUP_DAYS } from "./phones.ts";
 import { ROBOT_ERROR, turnstileOk } from "./turnstile.ts";
+import { canEmail as canSendEmail } from "./ses.ts";
 
 const API = "https://api.stripe.com/v1";
 
@@ -149,7 +150,7 @@ export async function handleBilling(request: Request, env: Env, path: string, ur
 		// Free plans: the person confirms their email address, then their checks start. Without email set up on this
 		// install there's no way to confirm, so a free account starts straight away.
 		if (plan.free === 1) {
-			const canEmail = !!env.EMAIL && !!(await install(db)).alertFrom;
+			const canEmail = canSendEmail(env) && !!(await install(db)).alertFrom;
 			a.status = canEmail ? "unverified" : "free";
 			a.verify_token = canEmail ? newId(16) : null;
 		}

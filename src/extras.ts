@@ -10,6 +10,7 @@ import { iso, stateOf } from "./core.ts";
 import { accountById, install, isLive, planById, type AccountRow, type Env, type MonitorRow } from "./db.ts";
 import { esc, publicName, statusData } from "./status.ts";
 import { tellSubscribers } from "./subscribers.ts";
+import { canEmail } from "./ses.ts";
 
 interface PageLike { id: string; account_id: string; slug: string; title: string; monitors: string; password?: string | null; mail_token?: string | null; colour?: string | null; intro: string | null; host: string | null }
 
@@ -242,7 +243,7 @@ export async function monthlyReports(env: Env, now: Date, perRun = 20): Promise<
 	const db = env.DB;
 	const month = lastMonth(now);
 	const inst = await install(db);
-	if (!inst.alertFrom || !env.EMAIL) return 0;
+	if (!inst.alertFrom || !canEmail(env)) return 0;
 	const { results } = await db.prepare(
 		"SELECT * FROM accounts WHERE reports = 1 AND (report_month IS NULL OR report_month < ?) AND (role = 'owner' OR (status IN ('active', 'trialing') AND plan IN (SELECT id FROM plans WHERE free = 0))) LIMIT ?",
 	).bind(month, perRun).all<AccountRow>();
