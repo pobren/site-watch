@@ -98,3 +98,11 @@ export async function sesSend(keys: AwsKeys, from: string, to: string, raw: stri
 	if (a.status === 429 || /Throttl|TooManyRequests|Maximum sending rate/i.test(a.text)) return "slow";
 	return a.text.slice(0, 200) || `error ${a.status}`;
 }
+
+/** The install's SES keys, or null when they aren't set. */
+export function sesKeys(env: { SES_ACCESS_KEY_ID?: string; SES_SECRET_ACCESS_KEY?: string; SES_REGION?: string }): AwsKeys | null {
+	return env.SES_ACCESS_KEY_ID && env.SES_SECRET_ACCESS_KEY ? { accessKeyId: env.SES_ACCESS_KEY_ID, secretAccessKey: env.SES_SECRET_ACCESS_KEY, region: env.SES_REGION || "eu-west-1" } : null;
+}
+
+/** Whether the install can send email at all: through SES, the EMAIL binding, or both. */
+export const canEmail = (env: { EMAIL?: unknown; SES_ACCESS_KEY_ID?: string; SES_SECRET_ACCESS_KEY?: string }) => !!env.EMAIL || !!sesKeys(env);

@@ -15,7 +15,7 @@
 import { brandedHtml } from "./email.ts";
 import { cleanEmail, iso, rawEmail } from "./core.ts";
 import { accountById, install, isLive, newId, planById, type AccountRow, type Env, type SubSend } from "./db.ts";
-import { sesSend, type AwsKeys } from "./ses.ts";
+import { sesKeys, sesSend } from "./ses.ts";
 import { esc } from "./status.ts";
 
 export const HOOK_KINDS = ["slack", "discord", "teams", "google", "webhook"] as const;
@@ -236,8 +236,13 @@ async function sendNow(env: Env, s: SubSend): Promise<string | null> {
 		const html = brandedHtml(s.subject, s.text, { brand, button: "Open the status page", footer: `You're getting this because you subscribed to updates about ${s.fromName}. Unsubscribe: ${s.unsub}` });
 		const text = `${s.text}\n\nUnsubscribe: ${s.unsub}`;
 		const raw = rawEmail(s.from, s.target, s.subject, text, new Date(), newId(12), s.fromName, html, [`List-Unsubscribe: <${s.unsub}>`, "List-Unsubscribe-Post: List-Unsubscribe=One-Click"]);
-		const keys: AwsKeys | null = env.SES_ACCESS_KEY_ID && env.SES_SECRET_ACCESS_KEY ? { accessKeyId: env.SES_ACCESS_KEY_ID, secretAccessKey: env.SES_SECRET_ACCESS_KEY, region: env.SES_REGION || "eu-west-1" } : null;
-		if (keys) return sesSend(keys, s.from, s.target, raw).catch((e) => String(e));
+		const keys = sesKeys(env);
+		if (keys) {
+			const problem = await sesSend(keys, s.from, s.target, raw).catch((e) => String(e));
+			// "slow" means try the batch again later; anything else falls back to the EMAIL binding when there is one.
+			if (!problem || problem === "slow" || !env.EMAIL) return problem;
+			console.error(`SES refused mail from ${s.from}, trying the EMAIL binding: ${problem}`);
+		}
 		if (!env.EMAIL) return "email isn't set up";
 		try {
 			// Loaded here so pages that only show the subscribe form (and the tests) don't need the email module.

@@ -8,6 +8,7 @@ import { CHANNEL_KINDS, hookMonitor, labelOf, webhookHeaders, MAX_FAILS, payload
 import { accountById, getMeta, install, newId, planById, setMeta, type AccountRow, type Env, type MonitorRow, type PlanRow } from "./db.ts";
 import { brandedHtml, toneOf, type EmailLook } from "./email.ts";
 import { sendApns } from "./apns.ts";
+import { canEmail, sesKeys, sesSend } from "./ses.ts";
 import { sendPush, type PushSub } from "./push.ts";
 import { flushPhones, isPhone, monthStart, phoneReady, queuePhone, type Allowance } from "./phones.ts";
 import { WL } from "./whitelabel.ts";
@@ -62,13 +63,22 @@ export async function postTo(c: Pick<ChannelRow, "kind" | "url" | "secret">, e: 
 	}
 }
 
-/** Sends an email in the install's brand (HTML with the plain text beside it). Null when Cloudflare took it, or what went wrong. */
+/** Sends an email in the install's brand (HTML with the plain text beside it): through Amazon SES when its keys are
+ *  set, with the EMAIL binding as backup. Null when it went, or what went wrong. */
 export async function sendEmail(env: Env, from: string, to: string, subject: string, text: string, fromName = "Site Watch", look: Partial<EmailLook> = {}): Promise<string | null> {
-	if (!env.EMAIL) return "email isn't set up on this install: the EMAIL binding is missing (see the README)";
+	if (!canEmail(env)) return "email isn't set up on this install: the EMAIL binding is missing (see the README)";
 	try {
 		const inst = await install(env.DB);
 		const html = brandedHtml(subject, text, { home: inst.origin ? `${inst.origin}/` : null, ...look, brand: look.brand ?? inst.brand });
-		await env.EMAIL.send(new EmailMessage(from, to, rawEmail(from, to, subject, text, new Date(), newId(12), fromName, html)));
+		const raw = rawEmail(from, to, subject, text, new Date(), newId(12), fromName, html);
+		const keys = sesKeys(env);
+		if (keys) {
+			const problem = await sesSend(keys, from, to, raw).catch((e) => String(e));
+			if (!problem) return null;
+			if (!env.EMAIL) return problem;
+			console.error(`SES refused mail from ${from}, trying the EMAIL binding: ${problem}`);
+		}
+		await env.EMAIL!.send(new EmailMessage(from, to, raw));
 		return null;
 	} catch (e) {
 		return e instanceof Error ? e.message : String(e);
