@@ -23,6 +23,9 @@ export const HOOK_NAMES: Record<string, string> = { slack: "Slack", discord: "Di
 /** New subscriptions a page takes in an hour, and from one visitor, so the form can't be used to send lots of emails. */
 const PAGE_HOURLY = 30;
 const VISITOR_HOURLY = 5;
+/** Unconfirmed email sign-ups across every status page on the install in a day. Status pages can sit on their own
+ *  domains, where a Turnstile widget can't run, so this caps what a robot could make the install send (27 Nov 2026). */
+const INSTALL_DAILY_PENDING = 50;
 /** Messages in one queue message, and the most sent straight away when there's no queue. */
 const PER_MESSAGE = 25;
 const INLINE_MAX = 200;
@@ -103,6 +106,8 @@ export async function handleSubscribe(request: Request, env: Env, page: PageRow)
 	if (kind === "email") {
 		const email = cleanEmail(form.get("email"));
 		if (!email) return no("Please enter your email address.");
+		const pending = await db.prepare("SELECT COUNT(*) AS n FROM subscribers WHERE kind = 'email' AND confirmed_at IS NULL AND created_at > ?").bind(iso(new Date(Date.now() - 86_400_000))).first<{ n: number }>();
+		if ((pending?.n ?? 0) >= INSTALL_DAILY_PENDING) return no("Lots of people have subscribed today. Please try again tomorrow.", 429);
 		if (limits.subscribers !== null) {
 			const n = await db.prepare("SELECT COUNT(*) AS n FROM subscribers WHERE account_id = ? AND kind = 'email'").bind(account.id).first<{ n: number }>();
 			if ((n?.n ?? 0) >= limits.subscribers) return no("This status page has as many email subscribers as it can take. Please check the page itself for news.", 403);
